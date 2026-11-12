@@ -1,0 +1,8 @@
+/build/
+/build-cmake/
+/cmake-build-*/
+.DS_Store
+*.dSYM/
+*.core
+.env
+.env.*

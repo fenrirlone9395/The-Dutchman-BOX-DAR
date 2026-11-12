@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>DesktopAudioRack</string>
+<key>CFBundleIdentifier</key><string>local.ryuji.DesktopAudioRack</string>
+<key>CFBundleDisplayName</key><string>The Dutchman BOX/DAR</string>
+<key>CFBundleName</key><string>The Dutchman BOX/DAR</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.0.12</string>
+<key>CFBundleVersion</key><string>12</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSAudioCaptureUsageDescription</key><string>システム音声を取得し、元音声をミュートして処理後の音声だけを再生します。</string>
+<key>NSScreenCaptureUsageDescription</key><string>選択したアプリまたはシステムの音声を取り込み、選択した出力へ再生します。</string>
+</dict></plist>
