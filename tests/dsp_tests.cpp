@@ -33,7 +33,7 @@ int main() {
         for(int i=0;i<256;++i) { float l=2,r=-1; dsp.process(l,r); assert(std::abs(l)<=InternalDSP::ceiling+1e-5); assert(std::abs(l+2*r)<1e-5); }
     }
     assert(dsp.reduction>20); // Both channels share one limiter gain.
-    p.inputBypass=true; p.masterBypass=true; p.limiterBypass=true;
+    p.inputDB=0; p.masterDB=0; p.limiterBypass=true;
     float l=0,r=0;
     for(int block=0;block<1000;++block) { dsp.begin(p,48000,256); for(int i=0;i<256;++i) {l=0.5;r=-0.25;dsp.process(l,r);} }
     assert(std::abs(l-0.5)<1e-4 && std::abs(r+0.25)<1e-4);
@@ -47,5 +47,5 @@ int main() {
     StereoMeter meter; meter.publish(0.2,1.1); meter.publish(0.1,0.4);
     assert(meter.peaks[0].exchange(0)==0.2f && meter.peaks[1].exchange(0)==1.1f);
     assert(meter.peaks[0]==0);
-    std::cout<<"PASS: EQ response/bypass/rates, channel isolation, limiter ceiling/link, gain bypass, stereo meter\n";
+    std::cout<<"PASS: EQ response/bypass/rates, channel isolation, limiter ceiling/link, gain unity reset, stereo meter\n";
 }

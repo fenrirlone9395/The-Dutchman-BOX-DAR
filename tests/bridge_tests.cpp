@@ -26,14 +26,14 @@ int main() {
         assert(std::abs(probe.sentL-.25f*input)<1e-5 && std::abs(probe.sentR+.5f*input)<1e-5);
         assert(std::abs(outL.back()-std::pow(.25f*input,3)*master)<1e-6);
         assert(std::abs(outR.back()-std::pow(-.5f*input,3)*master)<1e-6);
-        chain.parameters.inputBypass=true;
+        chain.parameters.inputDB=0;
         for(int i=0;i<200;++i)render();
         assert(std::abs(probe.sentL-.25f)<3e-5 && std::abs(probe.sentR+.5f)<3e-5);
         chain.parameters.masterDB=-24;
         for(int i=0;i<200;++i)render();
         assert(std::abs(probe.sentL-.25f)<3e-5); // Master gain must not affect plugin send.
     }
-    std::cout<<"PASS: pre-AU input gain, nonlinear effect chain, input bypass, independent master gain at 44.1/48/96 kHz\n";
+    std::cout<<"PASS: pre-AU input gain, nonlinear effect chain, input unity reset, independent master gain at 44.1/48/96 kHz\n";
     AudioBridge b;
     std::vector<float> l(4096,0.25f),r(4096,-0.5f),ol(512),orr(512);
     b.push(l.data(),r.data(),4096,1);

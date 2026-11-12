@@ -14,6 +14,8 @@ int main(){@autoreleasepool{
     NSMutableArray<NSView*>* pending=[NSMutableArray arrayWithObject:mainWindow.contentView];int knobs=0;bool input=false,output=false;
     while(pending.count){NSView* v=pending.lastObject;[pending removeLastObject];[pending addObjectsFromArray:v.subviews];if([v isKindOfClass:DARGainKnob.class]){DARGainKnob* k=(DARGainKnob*)v;++knobs;assert(k.target==app && k.action==@selector(gainKnob:));if(k.tag==0)input=true;if(k.tag==1)output=true;}}
     assert(knobs==2 && input && output);
-    NSLog(@"PASS: rack occupies >70%% width and >500pt height, responsive resize, floating EQ close/reopen");
+    [app showSpatial:nil];NSPanel* spatial=[app valueForKey:@"spatialPanel"];DARSpatialView* field=[app valueForKey:@"spatialView"];
+    assert(spatial.visible && spatial.level==NSFloatingWindowLevel && field);[spatial close];[app showSpatial:nil];assert(spatial.visible);
+    NSLog(@"PASS: rack occupies >70%% width and >500pt height, responsive resize, floating EQ and Spatial close/reopen");
     [ui closeEditors];
 }}

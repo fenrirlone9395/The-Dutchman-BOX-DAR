@@ -9,7 +9,7 @@ struct DSPParameters {
     std::atomic<float> inputDB{0}, masterDB{0};
     static constexpr std::array<float,15> centers{25,40,63,100,160,250,400,630,1000,1600,2500,4000,6300,10000,16000};
     std::array<std::atomic<float>,15> bands{};
-    std::atomic<bool> inputBypass{false}, eqBypass{false}, masterBypass{false}, limiterBypass{false};
+    std::atomic<bool> eqBypass{false}, limiterBypass{false};
 };
 // Audio-thread-owned state. Parameter transport is atomic, all storage is fixed.
 class InternalDSP {
@@ -26,8 +26,8 @@ public:
     void begin(const DSPParameters& p,double rate,size_t frames) {
         smooth=1-std::exp(-1.0/(rate*0.010));
         release=std::exp(-1.0/(rate*0.080));
-        inputTarget=p.inputBypass?1:std::pow(10.f,std::clamp(p.inputDB.load(),-24.f,12.f)/20);
-        masterTarget=p.masterBypass?1:std::pow(10.f,std::clamp(p.masterDB.load(),-60.f,6.f)/20);
+        inputTarget=std::pow(10.f,std::clamp(p.inputDB.load(),-24.f,12.f)/20);
+        masterTarget=std::pow(10.f,std::clamp(p.masterDB.load(),-60.f,6.f)/20);
         wetTarget=p.eqBypass?0:1; limitTarget=p.limiterBypass?0:1;
         float blockSmooth=1-std::exp(-double(frames)/(rate*0.025));
         for(size_t i=0;i<filters.size();++i) {

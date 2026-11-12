@@ -1,5 +1,6 @@
 #pragma once
 #include "DSP.hpp"
+#include "SpatialDSP.hpp"
 #include "BlockProcessor.hpp"
 #include <array>
 #include <atomic>
@@ -17,9 +18,11 @@ class AudioBridge {
     bool primed = false;
     float gain = 0;
     InternalDSP dsp;
+    CrossfeedDSP spatial;
 public:
     std::atomic<bool> muted{true};
     DSPParameters parameters;
+    SpatialParameters spatialParameters;
     std::atomic<double> captureRate{48000};
     BlockProcessor* rack=nullptr; // Lifetime owned by app, replaced only with output stopped.
     StereoMeter inputMeter, outputMeter;
@@ -31,7 +34,7 @@ public:
     void fadeIn() { gain=0; } // Call only while output is paused.
     void reset() {
         write = 0; read = 0; phase = 0; primed = false; gain = 0;
-        dsp.reset(); inputMeter.reset(); outputMeter.reset(); gainReduction=0;
+        dsp.reset(); spatial.reset(); inputMeter.reset(); outputMeter.reset(); gainReduction=0;
         inputPeak = 0; outputPeak = 0; underruns = 0; overruns = 0; invalid = 0;
     }
     uint64_t queued() const { auto r=read.load(); auto w=write.load(); return w >= r ? w-r : 0; }
@@ -62,6 +65,7 @@ public:
         double step=captureRate.load()/outputRate*(1+correction);
         float peak=0,pl=0,pr=0; bool starved=false;
         dsp.begin(parameters,outputRate,frames);
+        spatial.begin(spatialParameters,outputRate);
         for(size_t i=0;i<frames;++i) {
             float a=0,b=0;
             if(primed && w-rd>=2 && double(w-rd)>phase+step+1) {
@@ -75,6 +79,7 @@ public:
         if(rack) rack->process(l,r,frames);
         for(size_t i=0;i<frames;++i) {
             float a=l[i],b=r[i];
+            spatial.process(a,b);
             dsp.processMaster(a,b);
             if(!std::isfinite(a)||!std::isfinite(b)) { a=b=0; dsp.reset(); muted=true; ++invalid; }
             if(muted.load(std::memory_order_relaxed)) gain=0;

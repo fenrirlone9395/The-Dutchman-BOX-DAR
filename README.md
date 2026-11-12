@@ -1,12 +1,62 @@
 # The Dutchman BOX/DAR
 
+# 0.0.15 — Gainコントロールの整理
+
+Input Gain / Master GainのBypassを削除し、ノブの値を常に適用します。
+
+---
+
+# 0.0.14 — System Audioの多チャンネル減衰対策
+
+System Audioの取り込みを、グローバルなステレオミックスダウンから、macOS通常出力デバイスの先頭ストリーム・ch 1/2を直接取り込む非ミックスダウンTapへ変更しました。多チャンネル機器で未使用チャンネルも含めたミックスダウンにより音量が下がる経路を避けます。固定ゲイン補正は入れていません。
+
+- macOSの通常出力を音源の出力先（例：AudioFuse）に合わせてください。アプリの出力先は従来どおり別途選択できます。
+- 取り込むのは通常出力デバイスの先頭ストリームのch 1/2です。他のデバイスやch 3以降は合算しません。
+- 通常出力先の変更時は停止し、Startで新しい取り込み先に接続します。元音声ミュートと自アプリ除外は維持します。
+- 2/4/8/16chのインターリーブ入力と8chの分離入力から、先頭ステレオペアをサンプル値を変えずに取り込むテストを通過。AudioFuse実機でStart時の音量低下の改善をユーザー確認済みです。
+
+```sh
+bash scripts/test-tap-input.sh
+```
+
+更新前にInput Gainで増幅していた場合は、**0 dBへ戻してから**比較してください。
+
+---
+
+# 0.0.13 — Spatial Listening / Crossfeed
+
+右下のSPATIALボタンからGEQ同様のフローティングパネルをワンクリックで開きます。「Crossfeed 有効」をオンにするとヘッドホン向けの左右間処理が動作します。初期状態はOFFです。閉じても処理と設定は維持されます。
+
+- L/Rスピーカーをドラッグ：左右対称のスピーカー角度（±10〜75°）と距離（0.4〜3 m）。
+- 中央のYOUリングを上下ドラッグ：Crossfeed Amount（0〜100%）。上へ動かすと強くなります。
+- ダブルクリック／Reset Field：±30°、1.5 m、Amount 50%へリセット。有効／無効の状態は維持します。
+
+スライダーを使わず、透視投影した音場グリッド上で操作します。スピーカーと耳の距離差から遅延を計算し、低域中心の反対側への送りと左右混合を行います。距離・角度はCrossfeed近似モデルの入力であり、実際の部屋の距離感や前方定位を保証するものではありません。
+
+**この版はCrossfeedです。HRTFのVirtual Speakersモードはまだ未実装です。** ステレオを左右の独立モノ音源としてHRTF処理する段階は後続です。
+
+音声経路：Input Gain → AU Rack → **Crossfeed** → Master GEQ → Master Gain → Limiter。
+
+パラメータはatomicで受け渡し、20 ms程度の平滑化を適用。遅延バッファは事前確保した固定容量です。設定はパネル開閉・Start/Stopで維持しますが、アプリ再起動後の復元とAU Rackファイルへの保存はまだ含みません。
+
+検証：44.1/48/96/192 kHzでOffの透明性、対耳への遅延、低域寄りの特性、モノ/DCレベル維持、急なパラメータ変更時の有限・有界出力を確認。音声エンジンでAU出力後に作用すること、GUIのドラッグ→角度・距離・Amount変換、リセット、サブウィンドウの開閉もテストしています。
+
+```sh
+bash scripts/test-spatial.sh
+bash scripts/test-spatial-ui.sh
+```
+
+ヘッドホンを使って音楽での聴感を確認してください。スピーカー出力では通常OFFを想定しています。
+
+---
+
 macOSで再生している音を、好きなAudio Unitへ通して聴くためのスタンドアロンAudio Rackです。
 
 ![Rack First UI](preview-rack-eight.png)
 
 ## 現在のバージョン
 
-**0.0.12** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
+**0.0.15** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
 
 - System AudioをCore Audio Process Tapで取得。取得中は元音声をミュートし、自アプリの出力は除外。
 - アプリ単位の取得はScreenCaptureKitの標準ピッカーを使用。
@@ -20,7 +70,7 @@ macOSで再生している音を、好きなAudio Unitへ通して聴くため�
 音声経路：
 
 ```text
-Capture → SRC → Input Gain → AU Rack → Master GEQ → Master Gain → Limiter → Mute → Core Audio Output
+Capture → SRC → Input Gain → AU Rack → Crossfeed → Master GEQ → Master Gain → Limiter → Mute → Core Audio Output
 ```
 
 ## ビルド
@@ -70,7 +120,7 @@ INPUTメーターはInput Gainの前、各スロットのメーターはそのAU
 - 編集判定はAU公開の読み書き可能パラメータが対象。独自の非公開状態は検出できない場合がある。
 - 保存対象はAU Rack。内蔵Gain / GEQ・デバイス設定はまだ保存しない。
 - 出力はチャンネル1/2。デバイスのレートとバッファサイズは読み取りのみ。
-- Crossfeed / HRTFは後続の開発項目。
+- CrossfeedはSpatialパネルから使用可能。HRTFによる仮想スピーカーは未実装。
 
 ## テスト
 

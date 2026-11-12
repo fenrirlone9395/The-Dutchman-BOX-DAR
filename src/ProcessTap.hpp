@@ -3,7 +3,7 @@
 #include <CoreAudio/CoreAudio.h>
 class ProcessTap {
     AudioBridge& bridge;
-    AudioObjectID tap=0,device=0;
+    AudioObjectID tap=0,device=0,sourceDevice=0;
     AudioDeviceIOProcID io=nullptr;
     static OSStatus callback(AudioObjectID,const AudioTimeStamp*,const AudioBufferList*,const AudioTimeStamp*,AudioBufferList*,const AudioTimeStamp*,void*);
 public:
@@ -11,4 +11,5 @@ public:
     ~ProcessTap(){stop();}
     OSStatus start();
     void stop();
+    bool sourceIsCurrent() const;
 };
