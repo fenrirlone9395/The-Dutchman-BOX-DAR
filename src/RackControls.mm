@@ -80,5 +80,17 @@ static void label(NSString* s,CGFloat x,CGFloat y,CGFloat size,NSColor* c) {
 }
 - (void)mouseDown:(NSEvent*)e {[self.window makeFirstResponder:self];if(e.clickCount==2){self.floatValue=0;[self sendAction:self.action to:self.target];}}
 - (void)mouseDragged:(NSEvent*)e {self.floatValue-=e.deltaY*((e.modifierFlags&NSEventModifierFlagShift)?.02:.15);[self sendAction:self.action to:self.target];}
+- (void)scrollWheel:(NSEvent*)event {
+    if(!self.enabled || event.momentumPhase!=NSEventPhaseNone)return;
+    CGFloat delta=event.scrollingDeltaY;
+    if(!std::isfinite(delta) || delta==0)return;
+    // A wheel step is 0.5 dB; precise trackpad scrolling uses a pixel-scale rate.
+    // Ignore momentum so gain changes stop when the fingers leave the trackpad.
+    float step=event.hasPreciseScrollingDeltas?.02f:.5f;
+    if(event.modifierFlags&NSEventModifierFlagShift)step*=.1f;
+    float before=self.floatValue;
+    self.floatValue=before+delta*step;
+    if(self.floatValue!=before)[self sendAction:self.action to:self.target];
+}
 - (void)keyDown:(NSEvent*)e {if(e.keyCode==125||e.keyCode==126){self.floatValue+=(e.keyCode==126?.5:-.5);[self sendAction:self.action to:self.target];}else [super keyDown:e];}
 @end

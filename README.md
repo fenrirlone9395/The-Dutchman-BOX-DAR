@@ -1,3 +1,43 @@
+# 0.0.20 — App icon
+
+BOXのラックをモチーフにしたmacOSアイコンを追加しました。原画はassets/AppIcon-source.png、生成プロンプトはassets/AppIcon-generation.json、配布リソースはResources/AppIcon.icnsです。通常ビルド時に必要なら再生成します。Audio EngineはAuto / ASRC既定のままです。
+
+---
+
+# 0.0.19 — Auto / ASRC default
+
+AudioFuse実機でのユーザー確認を受け、新Clock / Rate Adapterを起動時の既定にしました。現在のProcess Tap / Aggregate経路は同期未証明なのでASRCを選択します。同一レートだけを根拠にDirectへ移行しません。SRC係数・品質・AU/DSP処理は0.0.18から変更なし。
+
+アプリメニューのLegacy Linearにチェックすると次のStartから従来方式へ戻せます。起動直後はチェックなし（Auto）。実際の稼働モードはAudio Engine DiagnosticsのModeで確認してください。切替は次のStartに適用され、再起動時はAutoに戻ります。
+
+提供された診断画像では48kHz/512 frames、57,768 callback、underrun/overrun/recoveryとも0、平均2.379ms、最大4.103ms。callback期間約10.667msに収まっています。これは当該実機・ラックでの観測であり、全プラグイン・全機器・長期間の保証ではありません。AppleとのオフラインCPU差は引き続き改善検討事項です。
+
+以下の0.0.18以前の説明は履歴です。現行設定は本節を参照してください。
+
+---
+
+# 0.0.18 — Engine menu fix
+
+起動時に古いQuit専用メニューで上書きしていた問題を修正。アプリメニューからAudio Engine DiagnosticsとLegacy Linear選択が利用できます。Legacy既定です。
+
+---
+
+# 0.0.17 — Gain wheel control
+
+Input Gain / Master Gainはノブ上のマウスホイールで調整できます。Shiftで微調整。トラックパッドにも対応し、慣性スクロールによる変更は抑止します。Audio Engineは0.0.16候補版と同じLegacy既定です。
+
+---
+
+# 0.0.16 — Phase 1 candidate / measured, not promoted
+
+Clock / Rate Adapterと開発用診断・3方式SRC比較ハーネスを追加しました。**自前sincはApple Mastering/Maxより約5倍遅いため、Legacyを既定として保持しています。** アプリメニューのLegacy Linearを外すと、次のStartから新Adapterを明示的に試せます。現在のTap Aggregateのクロック同期は未証明なので、その場合は保守的にASRCを選択します。Directの実機自動選択を保証する版ではありません。
+
+[実測・採用判断・未検証項目](docs/engine-phase1/REPORT.md)。AU Host / GEQ / Crossfeed / Limiterは変更していません。AudioFuse実機での長時間試験は未確認です。
+
+診断はアプリメニュー「Audio Engine Diagnostics…」またはCmd-Option-D。比較WAV・CSVの生成はオフラインテスト側だけです。
+
+---
+
 # The Dutchman BOX/DAR
 
 # 0.0.15 — Gainコントロールの整理
@@ -56,7 +96,7 @@ macOSで再生している音を、好きなAudio Unitへ通して聴くため�
 
 ## 現在のバージョン
 
-**0.0.15** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
+**0.0.20** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
 
 - System AudioをCore Audio Process Tapで取得。取得中は元音声をミュートし、自アプリの出力は除外。
 - アプリ単位の取得はScreenCaptureKitの標準ピッカーを使用。

@@ -9,7 +9,10 @@ class ProcessTap {
 public:
     explicit ProcessTap(AudioBridge& b):bridge(b){}
     ~ProcessTap(){stop();}
-    OSStatus start();
+    OSStatus start(bool beginIO=true);
+    OSStatus resume();
     void stop();
     bool sourceIsCurrent() const;
+    AudioDeviceID sourceID() const{return sourceDevice;}
+    AudioDeviceID aggregateID() const{return device;}
 };

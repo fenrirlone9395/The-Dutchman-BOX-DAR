@@ -1,0 +1,25 @@
+Direct 44100: bit exact, max=0 RMS=0 (25344 samples >0dBFS included)
+Direct 48000: bit exact, max=0 RMS=0 (25344 samples >0dBFS included)
+Direct 96000: bit exact, max=0 RMS=0 (25344 samples >0dBFS included)
+Sinc 44100->48000: unity/headroom/LR, 1024 taps
+Sinc 48000->44100: unity/headroom/LR, 1120 taps
+Sinc 88200->96000: unity/headroom/LR, 1024 taps
+Sinc 96000->48000: unity/headroom/LR, 2048 taps
+Drift -100 ppm / 1h (timestamp feedforward=0): fill 1988.33..2056.07 correction -100.00000 ppm
+Drift -50 ppm / 1h (timestamp feedforward=0): fill 2018.16..2052.03 correction -50.00000 ppm
+Drift -10 ppm / 1h (timestamp feedforward=0): fill 2042.03..2048.81 correction -10.00000 ppm
+Drift +10 ppm / 1h (timestamp feedforward=0): fill 2047.19..2053.97 correction 10.00000 ppm
+Drift +50 ppm / 1h (timestamp feedforward=0): fill 2043.97..2077.84 correction 50.00000 ppm
+Drift +100 ppm / 1h (timestamp feedforward=0): fill 2039.93..2107.67 correction 100.00000 ppm
+Drift -100 ppm / 1h (timestamp feedforward=1): fill 1999.93..2072.96 correction -100.00000 ppm
+Drift -50 ppm / 1h (timestamp feedforward=1): fill 2026.08..2057.55 correction -50.00000 ppm
+Drift -10 ppm / 1h (timestamp feedforward=1): fill 2043.95..2049.55 correction -10.00000 ppm
+Drift +10 ppm / 1h (timestamp feedforward=1): fill 2046.45..2052.05 correction 10.00000 ppm
+Drift +50 ppm / 1h (timestamp feedforward=1): fill 2038.45..2069.92 correction 50.00000 ppm
+Drift +100 ppm / 1h (timestamp feedforward=1): fill 2023.04..2096.07 correction 100.00000 ppm
+Full Float32 ring + ASRC -100 ppm + arrival jitter / 8s: no C++ heap allocation, no discontinuity on DC, no under/overrun; fill 2201.66..2351.00
+Full Float32 ring + ASRC -50 ppm + arrival jitter / 8s: no C++ heap allocation, no discontinuity on DC, no under/overrun; fill 2220.66..2351.00
+Full Float32 ring + ASRC -10 ppm + arrival jitter / 8s: no C++ heap allocation, no discontinuity on DC, no under/overrun; fill 2236.66..2351.00
+Full Float32 ring + ASRC +10 ppm + arrival jitter / 8s: no C++ heap allocation, no discontinuity on DC, no under/overrun; fill 2243.66..2352.00
+Full Float32 ring + ASRC +50 ppm + arrival jitter / 8s: no C++ heap allocation, no discontinuity on DC, no under/overrun; fill 2255.96..2357.97
+Full Float32 ring + ASRC +100 ppm + arrival jitter / 8s: no C++ heap allocation, no discontinuity on DC, no under/overrun; fill 2255.99..2374.88

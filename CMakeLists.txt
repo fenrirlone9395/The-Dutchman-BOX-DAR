@@ -9,7 +9,15 @@ set(CMAKE_OBJCXX_FLAGS_INIT "-isystem ${RACK_SDK}/usr/include/c++/v1")
 project(DesktopAudioRack LANGUAGES CXX OBJCXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_OBJCXX_STANDARD 20)
-add_executable(DesktopAudioRack MACOSX_BUNDLE src/Main.mm src/Output.mm src/ProcessTap.mm src/MeterView.mm src/RackControls.mm src/SpatialView.mm src/Theme.mm src/plugins/AURack.mm src/plugins/AURackUI.mm)
+add_executable(DesktopAudioRack MACOSX_BUNDLE src/Main.mm src/Output.mm src/ProcessTap.mm src/ClockDiagnostics.mm src/MeterView.mm src/RackControls.mm src/SpatialView.mm src/Theme.mm src/plugins/AURack.mm src/plugins/AURackUI.mm)
+# Keep the same icon resource for the shell and CMake bundles.
+set(BOX_ICON "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.icns")
+add_custom_command(OUTPUT "${BOX_ICON}"
+    COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-icon.sh"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/AppIcon-source.png" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-icon.sh"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+set_source_files_properties("${BOX_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+target_sources(DesktopAudioRack PRIVATE "${BOX_ICON}")
 target_compile_options(DesktopAudioRack PRIVATE -fobjc-arc -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(DesktopAudioRack PRIVATE "-framework CoreAudioKit" "-framework Cocoa" "-framework ScreenCaptureKit" "-framework CoreMedia" "-framework AudioToolbox" "-framework CoreAudio")
 set_target_properties(DesktopAudioRack PROPERTIES MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist")
@@ -35,3 +43,12 @@ add_executable(tap_input_tests tests/tap_input_tests.mm)
 target_compile_options(tap_input_tests PRIVATE -fobjc-arc -UNDEBUG)
 target_link_libraries(tap_input_tests PRIVATE "-framework Foundation" "-framework CoreAudio")
 add_test(NAME tap_input_tests COMMAND tap_input_tests)
+
+add_executable(rate_adapter_tests tests/rate_adapter_tests.cpp)
+target_compile_options(rate_adapter_tests PRIVATE -UNDEBUG)
+add_test(NAME rate_adapter_tests COMMAND rate_adapter_tests)
+add_executable(src_compare tests/src_compare.mm)
+target_link_libraries(src_compare PRIVATE "-framework AudioToolbox")
+add_executable(rate_benchmark tests/rate_benchmark.cpp)
+
+add_executable(asrc_spectrum tests/asrc_spectrum.cpp)

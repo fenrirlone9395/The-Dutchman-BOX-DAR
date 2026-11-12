@@ -1,0 +1,11 @@
+{
+  "tool": "built-in image_gen",
+  "prompt": "Use case: logo-brand. Asset type: production macOS application icon, a single square 1024x1024 PNG with real transparent outer background. Design a polished distinctive icon for 'The Dutchman BOX/DAR', an audio effects rack app. One large rounded-square tile with blue-rich deep navy anodized metal (#10264B), softly beveled edges, subtle precise studio highlights and restrained depth. Within the tile, a bold simplified front-facing audio rack with three thick stacked horizontal module faces, dark inset divisions, tiny amber status lights on the left and one confidently large amber gain knob on the right of the middle module. Rack fills most of the tile, readable silhouette at 32px. The top right of the navy tile has two crisp diagonal racing stripes, one wider dark crimson (#B51F35) and one narrow orange-amber (#FFAF24); match an elegant motorsport-inspired audio hardware identity. Color accents only deep crimson and warm amber; NO turquoise, no cyan, no green. Balanced centered composition with about 7% transparent padding around the rounded navy icon, mild tight grounding shadow only. Premium macOS icon, clean and intentional, hardware-like with minimal micro-detail. No letters, no text, no numerals, no real automaker/energy-drink logos, no watermark, no surrounding scenery or extra icons. It must be the icon artwork itself, not a presentation sheet or mockup.",
+  "generated_on": "2026-11-12",
+  "source": "AppIcon-source.png",
+  "palette": {
+    "navy": "#10264B",
+    "crimson": "#B51F35",
+    "amber": "#FFAF24"
+  }
+}

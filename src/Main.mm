@@ -28,6 +28,13 @@
     AURack auRack;
     std::unique_ptr<ProcessTap> processTap;
     BOOL systemTapSelected;
+    NSPanel* diagnosticsPanel;
+    NSTextView* diagnosticsText;
+    BOOL legacyRateRequested;
+    std::string clockSummary;
+    ClockDescription sourceClockDescription,aggregateClockDescription,outputClockDescription;
+    ClockEstimator captureClockEstimate,outputClockEstimate;
+    double clockSecondsPerTick;
     AURackUI* auUI;
     std::unique_ptr<Output> output;
     dispatch_queue_t captureQueue;
@@ -62,6 +69,9 @@
 }
 - (void)applicationDidFinishLaunching:(NSNotification*)note {
     (void)note;
+    NSString* iconPath=[NSBundle.mainBundle pathForResource:@"AppIcon" ofType:@"icns"];
+    if(iconPath){NSImage* icon=[[NSImage alloc] initWithContentsOfFile:iconPath];if(icon)NSApp.applicationIconImage=icon;}
+    legacyRateRequested=NO; // Auto adapter adopted after user-confirmed AudioFuse playback.
     processTap=std::make_unique<ProcessTap>(bridge);
     bridge.rack=&auRack;
     auUI=[[AURackUI alloc] initWithRack:&auRack];
@@ -70,6 +80,12 @@
     auUI.beforeEdit=^{ [weakSelf beginRackEdit]; };
     auUI.afterEdit=^{ [weakSelf endRackEdit]; };
     captureQueue=dispatch_queue_create("audio.rack.capture",DISPATCH_QUEUE_SERIAL);
+    mach_timebase_info_data_t clockBase{};mach_timebase_info(&clockBase);clockSecondsPerTick=double(clockBase.numer)/clockBase.denom/1e9;
+    NSMenu* appMenu=[NSMenu new];NSMenuItem* appItem=[NSMenuItem new];[appMenu addItem:appItem];NSMenu* commands=[NSMenu new];appItem.submenu=commands;
+    NSMenuItem* diagnostics=[[NSMenuItem alloc] initWithTitle:@"Audio Engine Diagnostics…" action:@selector(showDiagnostics:) keyEquivalent:@"d"];diagnostics.keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagOption;diagnostics.target=self;[commands addItem:diagnostics];
+    NSMenuItem* legacy=[[NSMenuItem alloc] initWithTitle:@"Legacy Linear (fallback; applies on next Start)" action:@selector(selectLegacy:) keyEquivalent:@""];legacy.target=self;legacy.state=NSControlStateValueOff;[commands addItem:legacy];[commands addItem:NSMenuItem.separatorItem];
+    [commands addItemWithTitle:@"Quit The Dutchman" action:@selector(terminate:) keyEquivalent:@"q"];NSApp.mainMenu=appMenu;
+
     window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,1160,760) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     window.title=@"The Dutchman BOX/DAR — Listening Rack";
     window.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
@@ -150,8 +166,6 @@
     picker.defaultConfiguration=config; [picker addObserver:self]; picker.active=YES;
     timer=[NSTimer scheduledTimerWithTimeInterval:1.0/30.0 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-    NSMenu* menu=[NSMenu new]; NSMenuItem* root=[NSMenuItem new]; [menu addItem:root];
-    root.submenu=[NSMenu new]; [root.submenu addItemWithTitle:@"Quit The Dutchman BOX/DAR" action:@selector(terminate:) keyEquivalent:@"q"]; NSApp.mainMenu=menu;
     [window center]; [window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
 }
 - (void)showSpatial:(id)sender { [spatialPanel center];[spatialPanel makeKeyAndOrderFront:nil]; }
@@ -204,6 +218,27 @@
 }
 - (void)contentSharingPicker:(SCContentSharingPicker*)picker didCancelForStream:(SCStream*)s {}
 - (void)contentSharingPickerStartDidFailWithError:(NSError*)error { dispatch_async(dispatch_get_main_queue(),^{ status.stringValue=error.localizedDescription; }); }
+- (void)selectLegacy:(NSMenuItem*)sender {legacyRateRequested=!legacyRateRequested;sender.state=legacyRateRequested?NSControlStateValueOn:NSControlStateValueOff;}
+- (void)showDiagnostics:(id)sender {
+    if(!diagnosticsPanel){diagnosticsPanel=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,920,560) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];diagnosticsPanel.title=@"The Dutchman — Audio Engine Diagnostics";diagnosticsPanel.releasedWhenClosed=NO;
+        NSScrollView* scroll=[[NSScrollView alloc] initWithFrame:diagnosticsPanel.contentView.bounds];scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;scroll.hasVerticalScroller=YES;
+        diagnosticsText=[[NSTextView alloc] initWithFrame:scroll.bounds];diagnosticsText.editable=NO;diagnosticsText.font=[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];diagnosticsText.autoresizingMask=NSViewWidthSizable;scroll.documentView=diagnosticsText;[diagnosticsPanel.contentView addSubview:scroll];}
+    if(!running)diagnosticsText.string=@"Stopped. Clock snapshots are collected on Start.\nAuto Clock / Rate Adapter is the default (unknown clocks use ASRC).\nCheck Legacy Linear in the app menu to use the fallback on the next Start.\nNo automatic Direct selection without proven clock synchronization.";
+    [diagnosticsPanel center];[diagnosticsPanel makeKeyAndOrderFront:nil];
+}
+- (BOOL)prepareRateAdapter {
+    captureClockEstimate.reset();outputClockEstimate.reset();
+    auto out=describeClock(activeDevice);outputClockDescription=out;
+    clockSummary="OUTPUT: "+out.details+"\n";
+    ClockEvidence evidence;
+    if(systemTapSelected){auto source=describeClock(processTap->sourceID());auto aggregate=describeClock(processTap->aggregateID());sourceClockDescription=source;aggregateClockDescription=aggregate;clockSummary+="SOURCE: "+source.details+"\nCAPTURE AGGREGATE: "+aggregate.details+"\nTap drift compensation requested: YES\n";
+        evidence.reason="Aggregate/tap clock synchronization is not proven end-to-end (drift compensation requested); conservative ASRC";
+    }else evidence.reason="ScreenCaptureKit 48k clock relationship unknown; conservative ASRC";
+    try{bridge.rateAdapter.prepare(bridge.captureRate.load(),output->rate,evidence,legacyRateRequested);}
+    catch(const std::exception& e){try{bridge.rateAdapter.prepare(bridge.captureRate.load(),output->rate,evidence,true);bridge.rateAdapter.reason=std::string("Prepare failed; explicit startup fallback: ")+e.what();}catch(...){return NO;}}
+    clockSummary+="Mode reason: "+bridge.rateAdapter.reason+"\n";
+    return YES;
+}
 - (void)mute:(id)sender { bridge.muted=!bridge.muted.load(); [self controls]; }
 - (void)deviceChanged:(id)sender { if(running) [self stopWithMessage:@"出力先を変更しました。Startで再開してください（ミュート）。"]; }
 - (void)toggle:(id)sender {
@@ -215,10 +250,10 @@
     if(result) { busy=NO; status.stringValue=[NSString stringWithFormat:@"出力開始失敗: %d",(int)result]; [self controls]; return; }
     auUI.processingRate=output->rate; geq.sampleRate=output->rate; geq.needsDisplay=YES;
     if(systemTapSelected) {
-        result=processTap->start();
+        result=processTap->start(false);
         busy=NO;
         if(result) { output->stop(); status.stringValue=[NSString stringWithFormat:@"System Tap開始失敗: %d（音声収録権限を確認）",(int)result]; }
-        else running=YES;
+        else { if(![self prepareRateAdapter]){[self stopWithMessage:@"Invalid rate adapter configuration"];return;}result=processTap->resume();if(!result)result=output->resume();if(result){processTap->stop();output->stop();status.stringValue=@"出力再開失敗";}else running=YES;}
         [self controls]; return;
     }
     bridge.captureRate=48000;
@@ -230,11 +265,12 @@
     if(![stream addStreamOutput:self type:SCStreamOutputTypeAudio sampleHandlerQueue:captureQueue error:&error]) {
         output->stop(); stream=nil; busy=NO; status.stringValue=error.localizedDescription; [self controls]; return;
     }
+    if(![self prepareRateAdapter]){[self stopWithMessage:@"Invalid rate adapter configuration"];return;}
     accepting=true;
     [stream startCaptureWithCompletionHandler:^(NSError* error) {
         dispatch_async(dispatch_get_main_queue(),^{
             if(error) { [self stopWithMessage:error.localizedDescription]; }
-            else { busy=NO; running=YES; status.stringValue=@"実行中・ミュート。経路を確認後、出力を有効にしてください。"; [self controls]; }
+            else { OSStatus result=output->resume();if(result){[self stopWithMessage:@"出力再開失敗"];return;}busy=NO; running=YES; [self controls]; }
         });
     }];
 }
@@ -282,6 +318,13 @@
     if(!busy && now-lastPresetCheck>=0.2) { lastPresetCheck=now; [auUI refreshStatus]; }
     if(running&&!busy && now-lastDeviceCheck>=0.2) {
         lastDeviceCheck=now;
+        if(!clockConfigurationMatches(outputClockDescription)||(systemTapSelected&&(!clockConfigurationMatches(sourceClockDescription)||!clockConfigurationMatches(aggregateClockDescription)))){[self stopWithMessage:@"Clock/rate configuration changed; Start to re-prepare adapter."];return;}
+        captureClockEstimate.update(bridge.captureTimestamp,clockSecondsPerTick);outputClockEstimate.update(bridge.outputTimestamp,clockSecondsPerTick);
+        if(captureClockEstimate.estimatedRate && outputClockEstimate.estimatedRate){double ppm=(captureClockEstimate.estimatedRate/outputClockEstimate.estimatedRate/(bridge.captureRate.load()/output->rate)-1)*1e6;if(std::isfinite(ppm)&&std::abs(ppm)<1000)bridge.feedForwardPPM=ppm;}
+        if(diagnosticsPanel.visible){auto& d=bridge.rateAdapter.telemetry;auto& t=bridge.callbackTiming;uint64_t count=t.count.load();
+            diagnosticsText.string=[NSString stringWithFormat:@"%s\nCapture nominal %.2f Hz / Output %.2f Hz\nTimestamp estimated %.5f / %.5f Hz (0 = unavailable or warming up)\nMode %s / ratio %.12f input frames per output frame / correction %+.4f ppm\nRing effective fill %.2f / target %zu (retained history included in raw queued: %llu)\nFill range %.2f .. %.2f\nSRC kernel latency %.4f ms / lookahead-priming %zu input frames / %zu taps\nUnderrun %llu / Overrun %llu / recoveries %llu\nCallback count %llu / mean %.3f us / max %.3f us\nHistogram upper-bound p95 %.3f / p99 %.3f / p99.9 %.3f us\n\nNo audio-thread file I/O. Legacy selection applies on next Start.\nReported device clocks above are startup snapshots.\n",clockSummary.c_str(),bridge.captureRate.load(),output->rate,captureClockEstimate.estimatedRate,outputClockEstimate.estimatedRate,rateModeName(bridge.rateAdapter.mode()),d.ratio.load(),d.ppm.load(),d.fill.load(),bridge.rateAdapter.targetFill(),bridge.queued(),d.minFill.load(),d.maxFill.load(),d.latencyMS.load(),bridge.rateAdapter.lookahead(),bridge.rateAdapter.taps(),bridge.underruns.load(),bridge.overruns.load(),d.recoveries.load(),count,count?t.totalNS.load()/double(count)/1000:0,t.maxNS.load()/1000.,t.percentileUS(.95),t.percentileUS(.99),t.percentileUS(.999)];
+        }
+
         AudioObjectPropertyAddress a{kAudioDevicePropertyDeviceIsAlive,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain}; UInt32 alive=0,size=sizeof(alive);
         OSStatus err=AudioObjectGetPropertyData(activeDevice,&a,0,nullptr,&size,&alive);
         double rate=0; a.mSelector=kAudioDevicePropertyNominalSampleRate; size=sizeof(rate);

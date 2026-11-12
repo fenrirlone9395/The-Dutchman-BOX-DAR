@@ -1,3 +1,27 @@
+## 0.0.20
+- ネイビーの3段ラックとCrimson/Amberストライプをモチーフにしたアプリアイコンを追加。
+- 16〜1024pxのmacOS .icnsを生成し、shell/CMake両方のbundleへ組み込み。
+- Audio Engineは0.0.19から変更なし（Auto / ASRC既定）。
+
+## 0.0.19
+- AudioFuse実機の安定動作をユーザー確認し、起動時の既定をAuto Clock/Rate Adapterへ変更。現在のTap経路ではASRC。
+- Legacyは次回Startに適用する手動fallbackとして維持。SRC・AU・DSPの演算内容は変更なし。
+
+## 0.0.18
+- 起動後半でQuitのみのメニューに上書きする処理を削除し、DiagnosticsとLegacy選択を表示。
+- 起動完了後の実際のメニュー経由で、診断表示・ショートカット設定・Legacy切替を回帰検証。
+
+## 0.0.17
+- Input/Master Gainノブへマウスホイール操作を追加。通常0.5 dB/step、Shiftで1/10の微調整。
+- トラックパッドの高精度スクロールは低感度、慣性スクロールは適用しない。
+- Phase 1候補のLegacy既定・音声エンジンは変更なし。
+
+## 0.0.16 — Phase 1 candidate
+- Baseline b6b4c41を保持し、Legacy byte parity、Direct bit exact、Fixed/Async sinc、clock diagnosticsを追加。
+- Apple Mastering/MaxとのWAV/CSV比較とASRC残差スペクトル、callback分布計測を追加。
+- 自前sincは測定上CPU負荷で劣るため既定化を見送り。Legacy既定、新Adapterは明示的opt-in。
+- AU Host / GEQ / Crossfeed / Limiterの実装は変更なし。詳細はdocs/engine-phase1/REPORT.md。
+
 ## 0.0.15
 - Input Gain / Master GainのBypassをUI・DSPから削除。ノブの値を常に適用。
 

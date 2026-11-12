@@ -5,11 +5,13 @@
 #import <CoreAudio/CATapDescription.h>
 #import <CoreAudio/AudioHardwareTapping.h>
 #include <unistd.h>
-OSStatus ProcessTap::callback(AudioObjectID,const AudioTimeStamp*,const AudioBufferList* data,const AudioTimeStamp*,AudioBufferList*,const AudioTimeStamp*,void* ctx) {
-    pushTapStereo(static_cast<ProcessTap*>(ctx)->bridge,data);
+OSStatus ProcessTap::callback(AudioObjectID,const AudioTimeStamp*,const AudioBufferList* data,const AudioTimeStamp* stamp,AudioBufferList*,const AudioTimeStamp*,void* ctx) {
+    auto& b=static_cast<ProcessTap*>(ctx)->bridge;
+    if(stamp && (stamp->mFlags & (kAudioTimeStampHostTimeValid|kAudioTimeStampSampleTimeValid))==(kAudioTimeStampHostTimeValid|kAudioTimeStampSampleTimeValid))b.captureTimestamp.publish(stamp->mSampleTime,stamp->mHostTime);
+    pushTapStereo(b,data);
     return noErr;
 }
-OSStatus ProcessTap::start() {
+OSStatus ProcessTap::start(bool beginIO) {
     stop();
     if(@available(macOS 14.2,*)) {
         pid_t pid=getpid(); AudioObjectID own=0; UInt32 size=sizeof(own);
@@ -44,11 +46,12 @@ OSStatus ProcessTap::start() {
             if(!s && rate>=8000) bridge.captureRate=rate; else if(!s) s=kAudio_ParamError;
         }
         if(!s) s=AudioDeviceCreateIOProcID(device,callback,this,&io);
-        if(!s) s=AudioDeviceStart(device,io);
+        if(!s && beginIO) s=AudioDeviceStart(device,io);
         if(s) stop(); return s;
     }
     return kAudioHardwareUnsupportedOperationError;
 }
+OSStatus ProcessTap::resume(){return device&&io?AudioDeviceStart(device,io):kAudio_ParamError;}
 bool ProcessTap::sourceIsCurrent() const {
     AudioDeviceID current=0; UInt32 size=sizeof(current);
     AudioObjectPropertyAddress a{kAudioHardwarePropertyDefaultOutputDevice,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain};

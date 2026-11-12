@@ -17,5 +17,17 @@ int main(){@autoreleasepool{
     [app showSpatial:nil];NSPanel* spatial=[app valueForKey:@"spatialPanel"];DARSpatialView* field=[app valueForKey:@"spatialView"];
     assert(spatial.visible && spatial.level==NSFloatingWindowLevel && field);[spatial close];[app showSpatial:nil];assert(spatial.visible);
     NSLog(@"PASS: rack occupies >70%% width and >500pt height, responsive resize, floating EQ and Spatial close/reopen");
+    // Exercise the installed menu after launch, rather than calling the action directly.
+    NSMenu* commands=NSApp.mainMenu.itemArray.firstObject.submenu;
+    NSInteger diagnosticItem=[commands indexOfItemWithTarget:app andAction:@selector(showDiagnostics:)];
+    NSInteger legacyItem=[commands indexOfItemWithTarget:app andAction:@selector(selectLegacy:)];
+    assert(diagnosticItem>=0 && legacyItem>=0);
+    NSMenuItem* shortcut=[commands itemAtIndex:diagnosticItem];assert([shortcut.keyEquivalent isEqualToString:@"d"]);
+    assert(shortcut.keyEquivalentModifierMask==(NSEventModifierFlagCommand|NSEventModifierFlagOption));
+    [commands performActionForItemAtIndex:diagnosticItem];NSPanel* diagnostic=[app valueForKey:@"diagnosticsPanel"];NSTextView* text=[app valueForKey:@"diagnosticsText"];assert(diagnostic.visible && text.string.length>0);assert(![[app valueForKey:@"legacyRateRequested"] boolValue]);
+    NSMenuItem* legacy=[commands itemAtIndex:legacyItem];assert(legacy.state==NSControlStateValueOff);
+    [commands performActionForItemAtIndex:legacyItem];assert([[app valueForKey:@"legacyRateRequested"] boolValue] && legacy.state==NSControlStateValueOn);
+    [commands performActionForItemAtIndex:legacyItem];assert(![[app valueForKey:@"legacyRateRequested"] boolValue] && legacy.state==NSControlStateValueOff);
+    NSLog(@"PASS: installed Diagnostics menu action/shortcut and Legacy checkbox toggle survive launch");
     [ui closeEditors];
 }}

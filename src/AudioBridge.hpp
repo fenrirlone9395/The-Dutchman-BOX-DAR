@@ -1,6 +1,8 @@
 #pragma once
 #include "DSP.hpp"
 #include "SpatialDSP.hpp"
+#include "ClockRateAdapter.hpp"
+#include "EngineDiagnostics.hpp"
 #include "BlockProcessor.hpp"
 #include <array>
 #include <atomic>
@@ -20,6 +22,10 @@ class AudioBridge {
     InternalDSP dsp;
     CrossfeedDSP spatial;
 public:
+    TimestampMailbox captureTimestamp,outputTimestamp;
+    CallbackTiming callbackTiming;
+    ClockRateAdapter rateAdapter;
+    std::atomic<double> feedForwardPPM{0};
     std::atomic<bool> muted{true};
     DSPParameters parameters;
     SpatialParameters spatialParameters;
@@ -34,6 +40,7 @@ public:
     void fadeIn() { gain=0; } // Call only while output is paused.
     void reset() {
         write = 0; read = 0; phase = 0; primed = false; gain = 0;
+        rateAdapter.reset(); feedForwardPPM=0;captureTimestamp.reset();outputTimestamp.reset();callbackTiming.reset();
         dsp.reset(); spatial.reset(); inputMeter.reset(); outputMeter.reset(); gainReduction=0;
         inputPeak = 0; outputPeak = 0; underruns = 0; overruns = 0; invalid = 0;
     }
@@ -58,17 +65,24 @@ public:
     void render(float* l,float* r,size_t frames,double outputRate) {
         auto rd=read.load(std::memory_order_relaxed);
         auto w=write.load(std::memory_order_acquire);
+        bool legacy=rateAdapter.mode()==RateMode::Legacy;
         constexpr uint64_t target=2048;
-        if(w-rd > 8192) { rd=w-target; phase=0; primed=false; ++overruns; }
-        if(!primed && w-rd>=target) primed=true;
+        if(legacy && w-rd > 8192) { rd=w-target; phase=0; primed=false; ++overruns; }
+        if(legacy && !primed && w-rd>=target) primed=true;
         double correction=std::clamp((double(w-rd)-target)/double(target)*0.002,-0.005,0.005);
         double step=captureRate.load()/outputRate*(1+correction);
+        if(legacy){auto& t=rateAdapter.telemetry;t.ratio=step;t.ppm=correction*1e6;t.fill=double(w-rd);t.minFill=std::min(t.minFill.load(std::memory_order_relaxed),double(w-rd));t.maxFill=std::max(t.maxFill.load(std::memory_order_relaxed),double(w-rd));}
         float peak=0,pl=0,pr=0; bool starved=false;
         dsp.begin(parameters,outputRate,frames);
         spatial.begin(spatialParameters,outputRate);
+        auto before=rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed);
+        if(!legacy) {rateAdapter.begin(w,frames,feedForwardPPM.load(std::memory_order_relaxed));if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before)++overruns;}
+        before=rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed);
+        auto reader=[&](int64_t n){return n<0?std::array<float,2>{0,0}:samples[uint64_t(n)%capacity];};
         for(size_t i=0;i<frames;++i) {
             float a=0,b=0;
-            if(primed && w-rd>=2 && double(w-rd)>phase+step+1) {
+            if(!legacy) rateAdapter.next(w,i,frames,reader,a,b);
+            else if(primed && w-rd>=2 && double(w-rd)>phase+step+1) {
                 auto &x=samples[rd%capacity], &y=samples[(rd+1)%capacity];
                 a=x[0]+(y[0]-x[0])*phase; b=x[1]+(y[1]-x[1])*phase;
                 phase+=step; auto used=uint64_t(phase); rd+=used; phase-=used;
@@ -87,6 +101,10 @@ public:
             l[i]=a*gain; r[i]=b*gain;
             pl=std::max(pl,std::abs(l[i])); pr=std::max(pr,std::abs(r[i]));
             peak=std::max(peak,std::max(std::abs(l[i]),std::abs(r[i])));
+        }
+        if(!legacy) {
+            rd=rateAdapter.retainedRead();
+            if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before)++underruns;
         }
         if(starved) ++underruns;
         StereoMeter::maximum(outputPeak,peak); outputMeter.publish(pl,pr);
