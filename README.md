@@ -1,204 +1,43 @@
-# 0.0.29 — Recovery state reset
-
-2026-11-13 実機確認：同一ラックで効果音の出力先をAudioFuse・MBP内蔵スピーカー・外付けディスプレイへ変更し、スクリーンショット操作時の再発なしとユーザー報告。最終診断はUnderrun/Overrun/Recoveryすべて0、fill約2048。短時間の観測であり、最初のcallback空白の原因特定・完全解消を示すものではありません。
-
-バッファ過剰時の読出し位置変更、および不足後の再primingで、古いPI積分・平滑化・ratio slew履歴をリセットします。位置変更後の制御には変更後の充填量を使用します。正常連続再生のSRC係数・DSP・コントローラ係数は変更しません。
-
-スクリーンショットの出力約95/394ms、入力約299msのcallback空白が生じる根本原因は未特定です。この変更は復旧後に古い補正が残る問題への対策であり、OS/Core Audio側の呼出し停止や最初の音切れを防ぐ保証ではありません。実機の効果音割込後の再確認が必要です。過去の0.0.20との全経路byte parityテストは復旧挙動を含むため、この版では比較基準として扱います。
-
----
-
-# 0.0.28 — Cached VST3 discovery
-
-起動直後は前回のVST3一覧をキャッシュから表示し、バックグラウンドで追加・更新・削除を確認します。バンドル内のファイル構成・サイズ・更新日時・シンボリックリンク情報を照合し、新規/変更分だけ別プロセスでスキャンします。初回・キャッシュ破損時は全件確認します。
-
-**Scan VST3** はキャッシュを無視した全件再スキャンです。認証変更などで候補が出ない時はこちらを使ってください。失敗したバンドルも結果を記録し、変更なしなら起動ごとに再試行しません。削除された候補は差分確認後に一覧から除きます。スキャン中も既存候補の使用・ラック編集・再生を継続できます。
-
-音声スレッドでディスク確認・スキャン・キャッシュ読書きは行いません。稼働中のAU/VST3、SRC/DSP方式とラック保存内容は変更なし。
-
----
-
-# 0.0.27 — Fixed insert slots
-
-8枠をDAWのインサートのような固定位置として扱います。ドラッグ先が空きなら移動、使用中なら2枠を交換します。削除しても後ろを詰めません。空き枠のAddからは、その位置へ挿入します。↑↓も隣の枠との交換です。
-
-Save/Loadは空き位置も保持するv4形式になりました。旧v1〜v3も読込可能です。Gain/GEQ/Spatialの保存とミュート状態の維持は継続。空き枠は音声処理を行いません。
-
----
-
-# 0.0.26 — Rack interaction / About
-
-挿入済みの**プラグイン名をクリック**すると、その位置のプラグイン選択メニューが開きます。8枠が埋まっていても差し替え可能。新候補の初期化に失敗した場合は元のプラグインを維持し、成功時もスロットのBypass状態は引き継ぎます。
-
-**左の番号またはプラグイン名をドラッグ**し、移動先の上下に出る黄色い挿入線へドロップすると順番を変更できます。空き枠へのドロップは末尾への移動になります。↑↓ボタンも引き続き使えます。
-
-アプリケーションメニューの **About The Dutchman BOX/DAR…** にバージョンとビルド番号を表示します。再生中の差し替え・並べ替えは既存の出力pause/resume境界を使用。Gain/GEQ/Spatialの設定とEmergency Muteは維持し、SRC/DSP方式は変更していません。
-
----
-
-# 0.0.25 — Neutron VST3 compatibility
-
-Neutronなどの補助サイドチェイン入力を持つVST3を、通常のステレオEffectとして読み込めるように修正。補助バスは明示的に無効化し、メイン信号経路を使用します。外部サイドチェインのルーティングは未実装です。初期化エラーには実際に失敗した段階を表示します。
-
----
-
-# 0.0.24 — Full rack settings
-
-**Save the Rack** でAU/VST3に加えてInput/Output Gain、GEQ全15バンドとBypass、Spatialの有効状態・角度・距離・量、Limiter Bypassもまとめて保存します。**Load the Rack** で音声設定と画面表示を復元します。
-
-旧v1/v2ラックも読み込めます。その場合、ファイルにないGain/GEQ/Spatial設定は現在値を維持します。新形式はv3で、旧アプリでは読み込めません。不正な設定やプラグイン復元失敗時は、現在のラック・設定を維持します。出力デバイス、Start/Stop、Emergency Mute状態は保存・変更しません。自動起動時復元ではなく、既存のSave/Load操作による保存です。SRC/DSPの処理方式は変更していません。
-
----
-
-# 0.0.23 — Rack controls fix
-
-VST3プリセット欄の再生中の点滅を修正。保存・読込は **Save the Rack / Load the Rack** に改称しました。保存対象はAU/VST3スロットの順序・Bypass・プラグイン状態です。Input/Master Gain、GEQ、Spatialの保存はまだ含みません。
-
----
-
-# 0.0.22 — VST3 first milestone
-
-**Scan VST3 → Add an effect → VST3** から、Apple SiliconネイティブのステレオEffectを追加できます。Editorはフロート表示。AUとの混在、Bypass、並べ替え、既存のSave/Loadに対応します。VST3のプリセットは当面メーカーGUI内で選択してください。
-
-初回のみ `bash scripts/setup-vst3.sh` でMITライセンスの固定版SDKを取得後、`bash scripts/build.sh`。Intel専用VST3・Instrument・追加音声バスは今回の対象外です。スキャン候補と、実際に挿せるプラグインは異なります。[対応範囲・検証・制限](docs/vst3/PHASE1.md)。SRC/GEQ/Crossfeed/Limiterのアルゴリズムは変更していません。
-
----
-
-# 0.0.21 — Recovery investigation / observation only
-
-長時間試験のUnderrun/Recovery調査用。SRC係数・音声DSP・PI/ratio制御・バッファ判定は変更せず、イベント前後の観測を追加しました。[調査結果と再現試験](docs/recovery-investigation/REPORT.md)。Auto/ASRC既定は維持しています。
-
-Diagnosticsの末尾に、入力／出力の到着間隔、PI制御内訳、必要先読み量、ブロック先頭の固定書込位置とイベント時の最新書込位置、ゼロ補充フレーム数、最近64イベントを表示します。次に増加した時は、再生中のDiagnostics全文をコピーしてください。音声ファイルやログファイルをAudio Threadで生成しません。
-
----
-
-# 0.0.20 — App icon
-
-BOXのラックをモチーフにしたmacOSアイコンを追加しました。原画はassets/AppIcon-source.png、生成プロンプトはassets/AppIcon-generation.json、配布リソースはResources/AppIcon.icnsです。通常ビルド時に必要なら再生成します。Audio EngineはAuto / ASRC既定のままです。
-
----
-
-# 0.0.19 — Auto / ASRC default
-
-AudioFuse実機でのユーザー確認を受け、新Clock / Rate Adapterを起動時の既定にしました。現在のProcess Tap / Aggregate経路は同期未証明なのでASRCを選択します。同一レートだけを根拠にDirectへ移行しません。SRC係数・品質・AU/DSP処理は0.0.18から変更なし。
-
-アプリメニューのLegacy Linearにチェックすると次のStartから従来方式へ戻せます。起動直後はチェックなし（Auto）。実際の稼働モードはAudio Engine DiagnosticsのModeで確認してください。切替は次のStartに適用され、再起動時はAutoに戻ります。
-
-提供された診断画像では48kHz/512 frames、57,768 callback、underrun/overrun/recoveryとも0、平均2.379ms、最大4.103ms。callback期間約10.667msに収まっています。これは当該実機・ラックでの観測であり、全プラグイン・全機器・長期間の保証ではありません。AppleとのオフラインCPU差は引き続き改善検討事項です。
-
-以下の0.0.18以前の説明は履歴です。現行設定は本節を参照してください。
-
----
-
-# 0.0.18 — Engine menu fix
-
-起動時に古いQuit専用メニューで上書きしていた問題を修正。アプリメニューからAudio Engine DiagnosticsとLegacy Linear選択が利用できます。Legacy既定です。
-
----
-
-# 0.0.17 — Gain wheel control
-
-Input Gain / Master Gainはノブ上のマウスホイールで調整できます。Shiftで微調整。トラックパッドにも対応し、慣性スクロールによる変更は抑止します。Audio Engineは0.0.16候補版と同じLegacy既定です。
-
----
-
-# 0.0.16 — Phase 1 candidate / measured, not promoted
-
-Clock / Rate Adapterと開発用診断・3方式SRC比較ハーネスを追加しました。**自前sincはApple Mastering/Maxより約5倍遅いため、Legacyを既定として保持しています。** アプリメニューのLegacy Linearを外すと、次のStartから新Adapterを明示的に試せます。現在のTap Aggregateのクロック同期は未証明なので、その場合は保守的にASRCを選択します。Directの実機自動選択を保証する版ではありません。
-
-[実測・採用判断・未検証項目](docs/engine-phase1/REPORT.md)。AU Host / GEQ / Crossfeed / Limiterは変更していません。AudioFuse実機での長時間試験は未確認です。
-
-診断はアプリメニュー「Audio Engine Diagnostics…」またはCmd-Option-D。比較WAV・CSVの生成はオフラインテスト側だけです。
-
----
-
 # The Dutchman BOX/DAR
 
-# 0.0.15 — Gainコントロールの整理
+macOSで再生している音声を、AU/VST3エフェクトへ通して聴くためのスタンドアロン・オーディオラックです。
 
-Input Gain / Master GainのBypassを削除し、ノブの値を常に適用します。
+現在のバージョン：**0.0.29**（開発版）
 
----
+## 動作環境
 
-# 0.0.14 — System Audioの多チャンネル減衰対策
+- Apple Silicon搭載Mac、macOS 14以降
+- System Audioの元音声ミュートにはmacOS 14.2以降が必要
+- ビルドにはXcode Command Line ToolsとVST3 SDKが必要
 
-System Audioの取り込みを、グローバルなステレオミックスダウンから、macOS通常出力デバイスの先頭ストリーム・ch 1/2を直接取り込む非ミックスダウンTapへ変更しました。多チャンネル機器で未使用チャンネルも含めたミックスダウンにより音量が下がる経路を避けます。固定ゲイン補正は入れていません。
+特定のオーディオインターフェースを前提としません。機器・ドライバー・プラグインの組み合わせによって動作が異なります。
 
-- macOSの通常出力を音源の出力先（例：AudioFuse）に合わせてください。アプリの出力先は従来どおり別途選択できます。
-- 取り込むのは通常出力デバイスの先頭ストリームのch 1/2です。他のデバイスやch 3以降は合算しません。
-- 通常出力先の変更時は停止し、Startで新しい取り込み先に接続します。元音声ミュートと自アプリ除外は維持します。
-- 2/4/8/16chのインターリーブ入力と8chの分離入力から、先頭ステレオペアをサンプル値を変えずに取り込むテストを通過。AudioFuse実機でStart時の音量低下の改善をユーザー確認済みです。
+## 主な機能
 
-```sh
-bash scripts/test-tap-input.sh
-```
-
-更新前にInput Gainで増幅していた場合は、**0 dBへ戻してから**比較してください。
-
----
-
-# 0.0.13 — Spatial Listening / Crossfeed
-
-右下のSPATIALボタンからGEQ同様のフローティングパネルをワンクリックで開きます。「Crossfeed 有効」をオンにするとヘッドホン向けの左右間処理が動作します。初期状態はOFFです。閉じても処理と設定は維持されます。
-
-- L/Rスピーカーをドラッグ：左右対称のスピーカー角度（±10〜75°）と距離（0.4〜3 m）。
-- 中央のYOUリングを上下ドラッグ：Crossfeed Amount（0〜100%）。上へ動かすと強くなります。
-- ダブルクリック／Reset Field：±30°、1.5 m、Amount 50%へリセット。有効／無効の状態は維持します。
-
-スライダーを使わず、透視投影した音場グリッド上で操作します。スピーカーと耳の距離差から遅延を計算し、低域中心の反対側への送りと左右混合を行います。距離・角度はCrossfeed近似モデルの入力であり、実際の部屋の距離感や前方定位を保証するものではありません。
-
-**この版はCrossfeedです。HRTFのVirtual Speakersモードはまだ未実装です。** ステレオを左右の独立モノ音源としてHRTF処理する段階は後続です。
-
-音声経路：Input Gain → AU Rack → **Crossfeed** → Master GEQ → Master Gain → Limiter。
-
-パラメータはatomicで受け渡し、20 ms程度の平滑化を適用。遅延バッファは事前確保した固定容量です。設定はパネル開閉・Start/Stopで維持しますが、アプリ再起動後の復元とAU Rackファイルへの保存はまだ含みません。
-
-検証：44.1/48/96/192 kHzでOffの透明性、対耳への遅延、低域寄りの特性、モノ/DCレベル維持、急なパラメータ変更時の有限・有界出力を確認。音声エンジンでAU出力後に作用すること、GUIのドラッグ→角度・距離・Amount変換、リセット、サブウィンドウの開閉もテストしています。
-
-```sh
-bash scripts/test-spatial.sh
-bash scripts/test-spatial-ui.sh
-```
-
-ヘッドホンを使って音楽での聴感を確認してください。スピーカー出力では通常OFFを想定しています。
-
----
-
-macOSで再生している音を、好きなAudio Unitへ通して聴くためのスタンドアロンAudio Rackです。
-
-![Rack First UI](preview-rack-eight.png)
-
-## 現在のバージョン
-
-**0.0.21** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
-
-- System AudioをCore Audio Process Tapで取得。取得中は元音声をミュートし、自アプリの出力は除外。
-- アプリ単位の取得はScreenCaptureKitの標準ピッカーを使用。
-- AUv2 Stereo Effectを最大8個追加。再生中の追加・削除・並べ替えに対応。
-- メーカーの純正GUIをフローティング表示。純正GUIがない場合はAUGenericViewへフォールバック。
-- Factory Preset、インストール済み`.aupreset`、ファイル指定による読み込み。
-- 現在のプリセット表示、チェックマーク、編集状態、−／＋によるザッピング。
-- Input Gain、15バンドMaster GEQ、Master Gain、左右連動Limiter、Emergency Mute。
-- AU Rackの種類・順序・プラグイン状態・プリセット情報を保存・復元。
-
-音声経路：
-
-```text
-Capture → SRC → Input Gain → AU Rack → Crossfeed → Master GEQ → Master Gain → Limiter → Mute → Core Audio Output
-```
+- Core Audio Process Tapによるシステム音声の取得と、取得元の直接再生のミュート
+- ScreenCaptureKitによるアプリ単位の音声取得
+- AUv2/VST3ステレオEffectを使用できる固定8スロット
+- プラグイン名からの差し替え、ドラッグによるスロット交換、空き位置を保持した保存
+- メーカーGUIのフローティング表示
+- AUのFactory Preset・`.aupreset`読込、選択状態・編集状態の表示、前後切替
+- Input Gain、15バンドMaster GEQ、Master Gain、Limiter、Emergency Mute
+- ヘッドホン向けCrossfeedと音場操作パネル
+- VST3一覧のキャッシュと起動時の差分スキャン
+- アプリメニューのAbout画面、Audio Engine Diagnostics
 
 ## ビルド
 
-Apple SiliconのMacとXcode Command Line Toolsが必要です。外部SDKやライブラリは不要です。
+リポジトリのルートで実行します。SDKの取得時はネットワーク接続が必要です。
 
 ```sh
+bash scripts/setup-vst3.sh
 bash scripts/build.sh
 open 'build/The Dutchman BOX-DAR.app'
 ```
 
-生成されるアプリは開発用のad-hoc署名です。App Store配布用・公証済みのアプリではありません。
+固定版のVST3 SDKを`build/`へ取得します。SDKのライセンス通知はアプリへ同梱されます。生成アプリは開発用のad-hoc署名で、公証済み配布物ではありません。
 
-CMake 3.24以降がある場合：
+CMake 3.24以降を利用する場合も、先にSDKの取得が必要です。
 
 ```sh
 cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
@@ -206,62 +45,77 @@ cmake --build build-cmake
 ctest --test-dir build-cmake --output-on-failure
 ```
 
-CMakeでは`build-cmake/DesktopAudioRack.app`が生成されます。CMake経由のビルドは未検証です。
+CMake経由のビルドは未検証です。上記のシェルスクリプトによるビルドを確認対象としています。
 
-## 使い方
+## 基本操作
 
-1. System Audioを選び、出力デバイスを指定してStart。
-2. 初回はmacOSの音声収録権限を許可。
-3. 起動直後だけ出力がミュートされているため「出力を有効にする」を押す。以後は手動のミュート状態を維持。
-4. 空きスロットの「Add an effect」からメーカー別AUメニューを開いて選択。
-5. EditorでプラグインGUIを表示。Input GainでAUへ送るレベルを調整。
-6. プリセット名をクリックして選択、−／＋で前後へ切替。編集したプリセットは斜体＋`*`で表示。
-7. 右下のMASTER EQから15バンドGEQを開く。閉じても処理・設定は維持。
-8. StopでSystem Audioの取得を終了し、元音声の通常再生へ戻る。
+1. macOSの通常出力を再生元の出力先に設定します。System Audioの取得対象は、そのデバイスの先頭ストリームのチャンネル1/2です。
+2. BOXでSystem Audioと処理後の出力デバイスを選び、Startを押します。初回はmacOSの収録権限を許可してください。
+3. 起動直後の出力ミュートを解除します。その後のStart/Stopでは手動のミュート状態を維持します。
+4. 空き枠のAdd an effectからプラグインを選びます。挿入済みの名前をクリックすると、その枠のプラグインを差し替えられます。
+5. 番号またはプラグイン名をドラッグして移動先へドロップします。空き枠なら移動、使用中なら交換します。削除しても後ろの枠は詰めません。
+6. EditorでメーカーGUIを開きます。VST3のプリセットはメーカーGUI内で選択してください。
+7. MASTER EQとSPATIALは、それぞれ独立したパネルで編集できます。
+8. Stopで取得を終了します。System Audioでは元音声の通常再生へ戻ります。
 
-ノブとEQフェーダーはドラッグで操作、Shiftで微調整、ダブルクリックで0 dB。EQはFlatで全バンドを戻せます。
+ゲインノブはドラッグ・マウスホイールに対応し、Shiftで微調整できます。ゲインノブとEQフェーダーはダブルクリックで0 dBへ戻せます。
 
-INPUTメーターはInput Gainの前、各スロットのメーターはそのAUの後、OUTPUTはミュートを含む最終出力です。
+アプリ単位の取得では元音声をミュートしません。二重再生しない出力経路を用意してください。BOXはmacOSの既定出力を自動変更しません。
 
-## 現時点の制限
+## 保存とスキャン
 
-- AUv2 Stereo Effect・単一入出力バスのみ。AUv3、VST3、Instrument、MIDI、サイドチェインは未対応。
-- アプリ単位のScreenCaptureKit取得では元音声をミュートしないため、二重再生しない経路が必要。
-- 第三者AUはin-processで実行。プラグイン自体のクラッシュを隔離する機能は未実装。
-- Rack変更・プリセット適用時は出力を短く休止する。キャプチャと元音声のミュートは継続。
-- SRCは検証用の線形補間。高品質SRCへの置換と長時間の安定性確認は後続課題。
-- Limiterは−1 dBFSのサンプルピーク方式。true-peak保証・lookaheadはなし。
-- 編集判定はAU公開の読み書き可能パラメータが対象。独自の非公開状態は検出できない場合がある。
-- 保存対象はAU Rack。内蔵Gain / GEQ・デバイス設定はまだ保存しない。
-- 出力はチャンネル1/2。デバイスのレートとバッファサイズは読み取りのみ。
-- CrossfeedはSpatialパネルから使用可能。HRTFによる仮想スピーカーは未実装。
+**Save the Rack / Load the Rack**で、プラグインの状態・順序・Bypass・空き位置に加え、Input/Master Gain、GEQ、Spatial、Limiter Bypassを保存・復元できます。現行形式はv4で、旧v1〜v3も読み込めます。旧ファイルに含まれない内蔵設定は現在値を維持します。
 
-## テスト
+出力デバイス、Start/Stop、Emergency Mute状態は保存対象外です。設定の保存は明示的なファイル操作で、起動時のラック自動復元ではありません。
+
+VST3は起動直後にキャッシュから候補を表示し、追加・更新・削除をバックグラウンドで確認します。**Scan VST3**はキャッシュを無視した全件再スキャンです。認証変更などで候補が表示されない場合にも利用できます。スキャン候補への掲載は互換性の保証ではなく、挿入時に形式を検証します。
+
+## 音声経路
+
+```text
+Capture → Clock/Rate Adapter → Input Gain → AU/VST3 Rack
+        → Crossfeed → Master GEQ → Master Gain → Limiter → Mute/Fade → Core Audio Output
+```
+
+出力デバイスのサンプルレートに追従します。通常のSystem Audio経路ではクロック同期を証明できないため、同一サンプルレートでもASRCを使用します。Directは同期が証明された条件の経路であり、単にレートが一致しただけでは選択しません。Legacy Linearはアプリメニューから次回Startに適用できる比較・フォールバック経路です。
+
+INPUTメーターはInput Gainの前、スロットメーターは各エフェクトの後、OUTPUTはミュートを含む最終出力です。
+
+全プラグインのBypassはエンジン全体の無処理を意味しません。GEQのFlatとBypassは別で、Limiterは初期状態で有効です。経路比較時は各状態とASRCの実動作をDiagnosticsで確認してください。
+
+## 現在の制限
+
+- AUv2/VST3のステレオEffectが対象です。AUv3、VST2、Instrument、MIDI、Intel専用プラグインのブリッジは未対応です。
+- VST3の補助音声バスは無効化します。外部サイドチェインのルーティングと完全なライブ入出力再構成は未対応です。
+- 処理とGUIは同一プロセスです。スキャンは別プロセスですが、稼働中のプラグインのクラッシュは隔離しません。
+- ラック変更・状態読込時は出力を短く休止します。キャプチャは継続します。
+- Limiterは−1 dBFSのサンプルピーク方式です。True Peakやlookaheadの保証はありません。
+- SpatialはCrossfeedです。HRTF、部屋の反射、ヘッドトラッキングは未実装です。
+- 通常再生とBOX経由の出力がエンドツーエンドでbit-exactであることは確認できていません。
+- コールバック空白の発生原因は未特定です。0.0.29では復旧時に古い制御状態が残る問題を修正していますが、すべての音切れの解消を保証しません。
+
+## テストと技術資料
 
 ```sh
 bash scripts/test.sh
+bash scripts/test-rate-adapter.sh
+bash scripts/test-recovery-reset.sh
 bash scripts/test-au.sh
-bash scripts/test-au-ui.sh
-bash scripts/test-controls.sh
-bash scripts/test-drawing.sh
-bash scripts/test-preset-browser.sh
-bash scripts/test-main-ui.sh
 bash scripts/test-effect-menu.sh
+bash scripts/test-main-ui.sh
+bash scripts/test-vst3.sh
+bash scripts/test-vst3-ui.sh
+bash scripts/test-vst3-catalog.sh
 ```
 
-各スクリプトはASan/UBSan付きで実行します。AU・GUIのテストにはAudio Componentサービスに接続できるmacOSのログインセッションが必要です。音声キャプチャの権限と実音声の動作は実機で確認してください。
+テストには実行環境・macOSサービスへの接続が必要なものがあります。ネイティブ音声・GUI試験はmacOSのログインセッションで実行してください。サニタイザーの適用範囲は各スクリプトを参照してください。合成入力による試験は、実デバイスでの長時間安定性や全プラグインの互換性を保証しません。
 
-実機でMcDSP等のAU動作・元音声のミュート・プリセット読込を確認済み。自動テストはApple標準AUとテスト用プロセッサを中心に検証しています。
+- [変更履歴](CHANGELOG.md)
+- [開発概要](docs/DEVELOPMENT_HISTORY.md)
+- [Clock/Rate Adapterの測定](docs/engine-phase1/REPORT.md)
+- [復旧処理の調査](docs/recovery-investigation/REPORT.md)
+- [VST3対応範囲](docs/vst3/PHASE1.md)
+- [透明性の調査](docs/transparency/REPORT.md)
+- [公開文書の編集方針](docs/PUBLICATION.md)
 
-## 構成
-
-- `src/AudioBridge.hpp` — 固定容量SPSCバッファ、SRC、処理順序
-- `src/ProcessTap.*` — System Audioの取得・元音声ミュート
-- `src/Output.*` — Core Audio HAL出力
-- `src/plugins/` — AUホスト、GUI、プリセット、Rack保存復元
-- `src/DSP.hpp` — Gain、15バンドGEQ、Limiter
-- `src/Main.mm` / `Theme.*` / `RackControls.*` / `MeterView.*` — AppKit UI
-
-変更履歴は[CHANGELOG.md](CHANGELOG.md)、開発中の詳細メモは[docs/DEVELOPMENT_HISTORY.md](docs/DEVELOPMENT_HISTORY.md)を参照してください。
-
-メーカー製プラグイン・プリセット・商標の権利は各権利者に帰属します。このリポジトリには第三者プラグインやメーカーのプリセットデータを含めません。
+第三者プラグイン・プリセット・商標の権利は各権利者に帰属します。第三者プラグインやメーカーのプリセットデータは同梱しません。

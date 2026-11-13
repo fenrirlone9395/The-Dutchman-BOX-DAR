@@ -1,4 +1,5 @@
-> Update in 0.0.19: Auto adapter was adopted as the startup default after the user confirmed AudioFuse operation. Screenshot: 48k/512 frames, 57,768 callbacks, zero under/overruns/recoveries, mean 2.379ms/max 4.103ms versus a 10.667ms nominal callback period. The historical offline findings and caveats below remain valid; Legacy remains a manual fallback. No filter or DSP algorithm changed for this adoption. This is evidence for that configuration, not a universal stability guarantee.
+> Current status: Auto Clock/Rate Adapter is the default from 0.0.19; an unproven clock relationship selects ASRC. Legacy remains a manual fallback. This report describes the 0.0.16 candidate and its measurements; historical default and recovery behavior must not be interpreted as current specifications. Recovery state handling changed in 0.0.29.
+
 
 # Audio Engine Phase 1 candidate — 0.0.16
 
@@ -91,8 +92,8 @@ Audio callback uses precomputed tables/fixed ring/history and atomic telemetry, 
 - Direct full-engine null after fade AND bypass smoothing settle: 44.1/48/96k bit exact, max=0, RMS=0; test samples include >0dBFS values. The finite generated sequence does not include every IEEE special value. An adapter-only fixture separately verifies copying of signed zero, subnormals and Float32 max. The full existing DSP bypass path may canonicalize signed zero; no universal IEEE bit-pattern claim is made for the entire engine and the protected DSP code was not changed.
 - Existing buffer, SRC drift, DSP, Spatial and multi-channel capture-buffer tests pass.
 - Native main-window/rack/EQ/Spatial/Diagnostics UI tested without starting audio capture.
-- Actual AudioFuse loopback, hardware-clock qualification and long real-device playback are **not verified** in this session. No source/device routing was changed for measurements.
-- Existing source checkout and baseline branch are preserved. Rollback via Legacy checkbox on the next Start, or the unchanged 0.0.15 app. No automatic streaming fallback.
+- End-to-end hardware loopback and hardware-clock qualification are **not established by these offline tests**. No source/device routing was changed for measurements.
+- The comparison baseline is retained. Rollback via Legacy checkbox on the next Start, or the unchanged 0.0.15 app. No automatic streaming fallback.
 - Future production proposal: fixed Apple backend plus independently benchmarked mature ASRC, retain this custom sinc as a transparent comparison fixture until it earns promotion. libsamplerate's full streaming API supports ratio transitions: https://libsndfile.github.io/libsamplerate/api_full.html . No external dependency was introduced here.
 
 ## Reproduce

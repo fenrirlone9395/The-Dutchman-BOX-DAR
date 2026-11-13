@@ -79,7 +79,7 @@
     NSString* iconPath=[NSBundle.mainBundle pathForResource:@"AppIcon" ofType:@"icns"];
     if(iconPath){NSImage* icon=[[NSImage alloc] initWithContentsOfFile:iconPath];if(icon)NSApp.applicationIconImage=icon;}
     recoveryHistory=[NSMutableArray new];
-    legacyRateRequested=NO; // Auto adapter adopted after user-confirmed AudioFuse playback.
+    legacyRateRequested=NO; // Auto adapter is the startup default; unknown clock relationships use ASRC.
     processTap=std::make_unique<ProcessTap>(bridge);
     bridge.rack=&auRack;
     auUI=[[AURackUI alloc] initWithRack:&auRack];

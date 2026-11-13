@@ -2,7 +2,7 @@
 #include "AudioBridge.hpp"
 #include <CoreAudio/CoreAudio.h>
 // Preserve the first stereo pair at its original sample level. Never sum/average
-// unused hardware outputs into it (wide AudioFuse streams may contain 8+ channels).
+// unused hardware outputs into it (wide hardware streams may contain 8+ channels).
 inline bool pushTapStereo(AudioBridge& bridge,const AudioBufferList* data) {
     if(!data || !data->mNumberBuffers) return false;
     const auto& first=data->mBuffers[0];

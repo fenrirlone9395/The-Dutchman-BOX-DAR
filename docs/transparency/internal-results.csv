@@ -1,0 +1,5 @@
+mode,flat_eq,limiter,signal_peak,max_error,rms_error,bit_mismatches,output_peak,correction_ppm,underruns
+Direct / No SRC,0,0,0.599884033,0,0,3,0.599884033,0,0
+Direct / No SRC,1,0,0.599884033,4.86489755e-13,1.5064563e-15,7,0.599884033,0,0
+Async Sinc,1,0,0.599884033,0.60816741,0.231087287,153600,0.600010633,46.4399093,0
+Direct / No SRC,1,1,0.989990234,0.098739326,0.0691747715,153600,0.891250908,0,0
