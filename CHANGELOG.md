@@ -1,3 +1,8 @@
+## 0.0.29 — Recovery state reset
+- 過剰backlog位置変更後に古いfillを制御へ渡す問題を修正。
+- 再priming時に古いPI/平滑化/slew履歴をリセット。正常時の係数・SRC/DSP処理は維持。
+- 効果音時のCapture/Output callback空白の発生原因は未特定。実機確認は継続。
+
 ## 0.0.28 — Cached VST3 discovery
 - 起動時にVST3キャッシュを即時使用し、追加/更新/削除だけバックグラウンドで確認。
 - 変更なし/失敗済みバンドルを再ロードせず、手動Scanは全件再スキャン。

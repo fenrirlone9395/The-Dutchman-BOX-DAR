@@ -71,8 +71,12 @@ public:
     void begin(uint64_t written,size_t frames,double feedForwardPPM=0){
         double fill=double(written-cursor)-phase;
         telemetry.fill=fill;telemetry.minFill=std::min(telemetry.minFill.load(std::memory_order_relaxed),fill);telemetry.maxFill=std::max(telemetry.maxFill.load(std::memory_order_relaxed),fill);
-        if(written-cursor>std::max(uint64_t(8192),uint64_t(target*4))){cursor=written-target;phase=0;primed=false;++telemetry.recoveries;}
-        if(!primed && written-cursor>=std::max(target,lookahead()+size_t(std::ceil(frames*inRate/outRate*1.001))+2))primed=true;
+        if(written-cursor>std::max(uint64_t(8192),uint64_t(target*4))){cursor=written-target;phase=0;primed=false;fill=double(written-cursor);++telemetry.recoveries;}
+        if(!primed && written-cursor>=std::max(target,lookahead()+size_t(std::ceil(frames*inRate/outRate*1.001))+2)){
+            // A new queue position is not clock drift. Old PI/filter/slew history must
+            // not survive a discontinuity and consume the newly primed queue again.
+            controller.reset();ratioStart=ratioEnd=inRate/outRate;primed=true;
+        }
         if(primed)telemetry.activeMinFill=std::min(telemetry.activeMinFill.load(std::memory_order_relaxed),fill);
         ratioStart=ratioEnd;
         double ppm=selected==RateMode::Async && primed?controller.update(fill,target,inRate,frames/outRate,feedForwardPPM):0;
