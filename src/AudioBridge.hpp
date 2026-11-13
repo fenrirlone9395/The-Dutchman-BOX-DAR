@@ -3,6 +3,7 @@
 #include "SpatialDSP.hpp"
 #include "ClockRateAdapter.hpp"
 #include "EngineDiagnostics.hpp"
+#include "RecoveryDiagnostics.hpp"
 #include "BlockProcessor.hpp"
 #include <array>
 #include <atomic>
@@ -19,9 +20,13 @@ class AudioBridge {
     double phase = 0;
     bool primed = false;
     float gain = 0;
+    uint64_t outputBlocks=0,lastCaptureSequence=0;
     InternalDSP dsp;
     CrossfeedDSP spatial;
 public:
+    EndpointActivity captureActivity,outputActivity;
+    RecoveryEvents recoveryEvents;
+    std::atomic<uint64_t> initialZeroInputFrames{0},recoveryZeroInputFrames{0},lastPlannedResume{0},lastRenderNS{0};
     TimestampMailbox captureTimestamp,outputTimestamp;
     CallbackTiming callbackTiming;
     ClockRateAdapter rateAdapter;
@@ -40,12 +45,16 @@ public:
     void fadeIn() { gain=0; } // Call only while output is paused.
     void reset() {
         write = 0; read = 0; phase = 0; primed = false; gain = 0;
+        outputBlocks=lastCaptureSequence=0;captureActivity.reset();outputActivity.reset();recoveryEvents.reset();initialZeroInputFrames=0;recoveryZeroInputFrames=0;lastPlannedResume=0;lastRenderNS=0;
         rateAdapter.reset(); feedForwardPPM=0;captureTimestamp.reset();outputTimestamp.reset();callbackTiming.reset();
         dsp.reset(); spatial.reset(); inputMeter.reset(); outputMeter.reset(); gainReduction=0;
         inputPeak = 0; outputPeak = 0; underruns = 0; overruns = 0; invalid = 0;
     }
     uint64_t queued() const { auto r=read.load(); auto w=write.load(); return w >= r ? w-r : 0; }
     void push(const float* l, const float* r, size_t frames, size_t stride) {
+        uint64_t sequence=captureTimestamp.sequence.load(std::memory_order_acquire);double sample=std::numeric_limits<double>::quiet_NaN();
+        if(sequence && sequence!=lastCaptureSequence){sample=captureTimestamp.sample.load(std::memory_order_relaxed);lastCaptureSequence=sequence;}
+        captureActivity.observe(mach_absolute_time(),uint32_t(frames),captureRate.load(std::memory_order_relaxed),sample);
         auto w = write.load(std::memory_order_relaxed);
         auto rd = read.load(std::memory_order_acquire);
         if (frames > capacity-(w-rd)) { ++overruns; return; }
@@ -63,6 +72,8 @@ public:
     // Bounded, allocation-free linear SRC, with gentle occupancy-based clock correction.
     // Replace with band-limited SRC before production listening-quality release.
     void render(float* l,float* r,size_t frames,double outputRate) {
+        ++outputBlocks;uint64_t renderBegan=mach_absolute_time();
+        std::array<RecoveryEvent,3> pendingEvents{};size_t pendingCount=0;
         auto rd=read.load(std::memory_order_relaxed);
         auto w=write.load(std::memory_order_acquire);
         bool legacy=rateAdapter.mode()==RateMode::Legacy;
@@ -76,12 +87,27 @@ public:
         dsp.begin(parameters,outputRate,frames);
         spatial.begin(spatialParameters,outputRate);
         auto before=rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed);
-        if(!legacy) {rateAdapter.begin(w,frames,feedForwardPPM.load(std::memory_order_relaxed));if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before)++overruns;}
+        bool wasPrimed=rateAdapter.isPrimed();
+        auto observeRecovery=[&](RecoveryReason reason,size_t frame){
+            RecoveryEvent event;event.reason=reason;event.host=mach_absolute_time();event.outputBlock=outputBlocks;event.frames=uint32_t(frames);event.frameInBlock=uint32_t(frame);event.snapshotWrite=w;event.liveWrite=write.load(std::memory_order_acquire);event.cursor=rateAdapter.consumed();event.phase=rateAdapter.fractionalPosition();
+            auto& t=rateAdapter.telemetry;event.fillAtEntry=t.fill.load();event.ratio=rateAdapter.stepAt(frame,frames);event.correctionPPM=t.ppm.load();event.feedForwardPPM=t.feedForwardPPM.load();event.filteredFill=t.filteredFill.load();event.proportionalPPM=t.proportionalPPM.load();event.integralPPM=t.integralPPM.load();event.desiredPPM=t.desiredPPM.load();
+            event.neededInput=uint32_t(rateAdapter.requiredInput(event.ratio));event.zeroInputFrames=reason==RecoveryReason::InputLookaheadShortage?uint32_t(frames-frame):0;
+            auto captureEntry=captureActivity.lastEntry.load(std::memory_order_acquire);event.captureAgeTicks=captureEntry&&event.host>=captureEntry?event.host-captureEntry:0;event.captureGapTicks=captureActivity.lastGapTicks.load();event.outputGapTicks=outputActivity.lastGapTicks.load();event.captureSampleJumps=captureActivity.sampleJumps.load();event.outputSampleJumps=outputActivity.sampleJumps.load();event.previousRenderNS=lastRenderNS.load();event.lastPlannedResume=lastPlannedResume.load();if(pendingCount<pendingEvents.size())pendingEvents[pendingCount++]=event;
+        };
+        if(!legacy) {
+            rateAdapter.begin(w,frames,feedForwardPPM.load(std::memory_order_relaxed));
+            if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before){++overruns;observeRecovery(RecoveryReason::ExcessBacklog,0);}
+            if(!wasPrimed&&rateAdapter.isPrimed()&&rateAdapter.telemetry.recoveries.load())observeRecovery(RecoveryReason::Reprimed,0);
+        }
         before=rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed);
         auto reader=[&](int64_t n){return n<0?std::array<float,2>{0,0}:samples[uint64_t(n)%capacity];};
+        bool observedShortage=false;uint64_t zeroInputs=0;
         for(size_t i=0;i<frames;++i) {
             float a=0,b=0;
-            if(!legacy) rateAdapter.next(w,i,frames,reader,a,b);
+            if(!legacy) {
+                bool available=rateAdapter.next(w,i,frames,reader,a,b);
+                if(!available){++zeroInputs;if(!observedShortage){if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before)observeRecovery(RecoveryReason::InputLookaheadShortage,i);observedShortage=true;}}
+            }
             else if(primed && w-rd>=2 && double(w-rd)>phase+step+1) {
                 auto &x=samples[rd%capacity], &y=samples[(rd+1)%capacity];
                 a=x[0]+(y[0]-x[0])*phase; b=x[1]+(y[1]-x[1])*phase;
@@ -103,6 +129,7 @@ public:
             peak=std::max(peak,std::max(std::abs(l[i]),std::abs(r[i])));
         }
         if(!legacy) {
+            if(zeroInputs){if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed))recoveryZeroInputFrames.fetch_add(zeroInputs,std::memory_order_relaxed);else initialZeroInputFrames.fetch_add(zeroInputs,std::memory_order_relaxed);}
             rd=rateAdapter.retainedRead();
             if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before)++underruns;
         }
@@ -110,5 +137,6 @@ public:
         StereoMeter::maximum(outputPeak,peak); outputMeter.publish(pl,pr);
         StereoMeter::maximum(gainReduction,dsp.reduction);
         read.store(rd,std::memory_order_release);
+        if(pendingCount){uint64_t elapsed=uint64_t((mach_absolute_time()-renderBegan)*callbackTiming.nanosPerTick);for(size_t i=0;i<pendingCount;++i){pendingEvents[i].currentRenderNS=elapsed;recoveryEvents.push(pendingEvents[i]);}}
     }
 };

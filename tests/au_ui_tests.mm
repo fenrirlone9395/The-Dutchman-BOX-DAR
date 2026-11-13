@@ -44,6 +44,6 @@ int main() { @autoreleasepool {
     data=[NSPropertyListSerialization dataWithPropertyList:wrong format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];assert([data writeToURL:file atomically:YES]);
     [ui applyPresetURL:file index:0];assert(before==1 && after==1);
     [NSFileManager.defaultManager removeItemAtURL:file error:nil];
-    [ui remove:button]; assert(rack.slots.empty()); assert(before==2 && after==2);
+    [ui remove:button]; assert(rack.slots.size()==1 && !rack.slots[0]); assert(before==2 && after==2);
     std::cout<<"PASS: .aupreset file restore and component mismatch rejection; embedded rack mutation hooks; rack UI construction, editor creation/reopen/teardown\n";
 } }

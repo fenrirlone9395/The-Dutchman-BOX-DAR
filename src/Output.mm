@@ -25,11 +25,13 @@ std::vector<OutputDevice> outputDevices() {
 OSStatus Output::callback(void* ctx,AudioUnitRenderActionFlags*,const AudioTimeStamp* stamp,UInt32,UInt32 frames,AudioBufferList* data) {
     auto* self=static_cast<Output*>(ctx);
     uint64_t begin=mach_absolute_time();
+    self->bridge.outputActivity.observe(begin,frames,self->rate,stamp&&(stamp->mFlags&kAudioTimeStampSampleTimeValid)?stamp->mSampleTime:std::numeric_limits<double>::quiet_NaN());
     if(stamp && (stamp->mFlags & (kAudioTimeStampHostTimeValid|kAudioTimeStampSampleTimeValid))==(kAudioTimeStampHostTimeValid|kAudioTimeStampSampleTimeValid))self->bridge.outputTimestamp.publish(stamp->mSampleTime,stamp->mHostTime);
     for(UInt32 i=0;i<data->mNumberBuffers;++i) if(data->mBuffers[i].mData) memset(data->mBuffers[i].mData,0,data->mBuffers[i].mDataByteSize);
     if(data->mNumberBuffers>=2 && data->mBuffers[0].mDataByteSize>=frames*sizeof(float) && data->mBuffers[1].mDataByteSize>=frames*sizeof(float))
         self->bridge.render(static_cast<float*>(data->mBuffers[0].mData),static_cast<float*>(data->mBuffers[1].mData),frames,self->rate);
-    self->bridge.callbackTiming.record(mach_absolute_time()-begin);
+    uint64_t elapsed=mach_absolute_time()-begin;
+    self->bridge.callbackTiming.record(elapsed);self->bridge.lastRenderNS=uint64_t(elapsed*self->bridge.callbackTiming.nanosPerTick);
     return noErr;
 }
 OSStatus Output::start(AudioDeviceID device) {
@@ -53,10 +55,10 @@ OSStatus Output::start(AudioDeviceID device) {
     AURenderCallbackStruct cb{callback,this};
     if((s=AudioUnitSetProperty(unit,kAudioUnitProperty_SetRenderCallback,kAudioUnitScope_Input,0,&cb,sizeof(cb)))) return check(s);
     if((s=AudioUnitInitialize(unit))) return check(s);
-    bridge.callbackTiming.prepare();
+    bridge.callbackTiming.prepare();bridge.captureActivity.prepare();bridge.outputActivity.prepare();
     return noErr; // Construct/initialize only; caller prepares the rate adapter before resume().
 }
 void Output::stop() { if(unit) { AudioOutputUnitStop(unit); AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); unit=nullptr; } }
 
 void Output::pause() { if(unit) AudioOutputUnitStop(unit); }
-OSStatus Output::resume() { bridge.fadeIn(); return unit?AudioOutputUnitStart(unit):kAudio_ParamError; }
+OSStatus Output::resume() { bridge.lastPlannedResume=mach_absolute_time();bridge.fadeIn(); return unit?AudioOutputUnitStart(unit):kAudio_ParamError; }

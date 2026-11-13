@@ -9,7 +9,29 @@ set(CMAKE_OBJCXX_FLAGS_INIT "-isystem ${RACK_SDK}/usr/include/c++/v1")
 project(DesktopAudioRack LANGUAGES CXX OBJCXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_OBJCXX_STANDARD 20)
-add_executable(DesktopAudioRack MACOSX_BUNDLE src/Main.mm src/Output.mm src/ProcessTap.mm src/ClockDiagnostics.mm src/MeterView.mm src/RackControls.mm src/SpatialView.mm src/Theme.mm src/plugins/AURack.mm src/plugins/AURackUI.mm)
+add_executable(DesktopAudioRack MACOSX_BUNDLE src/Main.mm src/Output.mm src/ProcessTap.mm src/ClockDiagnostics.mm src/MeterView.mm src/RackControls.mm src/SpatialView.mm src/Theme.mm src/plugins/AURack.mm src/plugins/AURackUI.mm src/plugins/RackSlotView.mm)
+# The SDK is pinned by scripts/setup-vst3.sh; no SDK files are downloaded during build.
+set(VST3_SDK "${CMAKE_CURRENT_SOURCE_DIR}/build/vst3sdk")
+if(NOT EXISTS "${VST3_SDK}/pluginterfaces/vst/ivstaudioprocessor.h")
+    message(FATAL_ERROR "Run bash scripts/setup-vst3.sh before configuring")
+endif()
+target_compile_definitions(DesktopAudioRack PRIVATE DAR_ENABLE_VST3=1 RELEASE=1)
+target_include_directories(DesktopAudioRack PRIVATE "${VST3_SDK}")
+target_sources(DesktopAudioRack PRIVATE src/plugins/VST3Host.mm
+    "${VST3_SDK}/pluginterfaces/base/funknown.cpp"
+    "${VST3_SDK}/pluginterfaces/base/coreiids.cpp"
+    "${VST3_SDK}/public.sdk/source/common/commoniids.cpp"
+    "${VST3_SDK}/public.sdk/source/common/memorystream.cpp"
+    "${VST3_SDK}/public.sdk/source/common/commonstringconvert.cpp"
+    "${VST3_SDK}/public.sdk/source/vst/vstinitiids.cpp"
+    "${VST3_SDK}/public.sdk/source/common/threadchecker_mac.mm"
+    "${VST3_SDK}/public.sdk/source/vst/hosting/connectionproxy.cpp"
+    "${VST3_SDK}/public.sdk/source/vst/hosting/hostclasses.cpp"
+    "${VST3_SDK}/public.sdk/source/vst/hosting/pluginterfacesupport.cpp"
+    "${VST3_SDK}/public.sdk/source/vst/utility/stringconvert.cpp")
+configure_file("${VST3_SDK}/LICENSE.txt" "${CMAKE_CURRENT_BINARY_DIR}/VST3-SDK-LICENSE.txt" COPYONLY)
+set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/VST3-SDK-LICENSE.txt" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+target_sources(DesktopAudioRack PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/VST3-SDK-LICENSE.txt")
 # Keep the same icon resource for the shell and CMake bundles.
 set(BOX_ICON "${CMAKE_CURRENT_SOURCE_DIR}/Resources/AppIcon.icns")
 add_custom_command(OUTPUT "${BOX_ICON}"
@@ -52,3 +74,7 @@ target_link_libraries(src_compare PRIVATE "-framework AudioToolbox")
 add_executable(rate_benchmark tests/rate_benchmark.cpp)
 
 add_executable(asrc_spectrum tests/asrc_spectrum.cpp)
+
+add_executable(recovery_diagnostics_tests tests/recovery_diagnostics_tests.cpp)
+target_compile_options(recovery_diagnostics_tests PRIVATE -UNDEBUG)
+add_test(NAME recovery_diagnostics_tests COMMAND recovery_diagnostics_tests)

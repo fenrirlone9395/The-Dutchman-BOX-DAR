@@ -1,0 +1,8 @@
+REPRO frozen write limit: snapshot available=514, current available=1026, needed=515; recovery despite newer published input (synthetic scheduling case)
+REPRO source pause: event frame=511/512, frozen/live=514/514, first-block zero inputs=1, cumulative=1537
+Queue burst +0: no below-lookahead fill / 15min, fill 2048.00..2048.00
+REPRO queue burst +512 frames: below-512-frame lookahead at 402.43s, entry fill 512.00, correction +397.04ppm, P -1558.53 I -667.74 (actual clock +1.2ppm, no capture loss)
+REPRO queue burst +1024 frames: below-512-frame lookahead at 161.21s, entry fill 512.00, correction +168.67ppm, P -1581.30 I -1000.00 (actual clock +1.2ppm, no capture loss)
+REPRO queue burst +1520 frames: below-512-frame lookahead at 158.56s, entry fill 511.81, correction +415.49ppm, P -1556.88 I -623.43 (actual clock +1.2ppm, no capture loss)
+REPRO queue burst +2048 frames: below-512-frame lookahead at 163.70s, entry fill 511.86, correction +570.80ppm, P -1541.34 I -310.86 (actual clock +1.2ppm, no capture loss)
+PASS: starvation/reprime records, zero-input accounting, arrival/sample-time distinction, bounded event queue; SRC/controller unchanged

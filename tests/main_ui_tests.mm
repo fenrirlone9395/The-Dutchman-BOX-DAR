@@ -19,6 +19,11 @@ int main(){@autoreleasepool{
     NSLog(@"PASS: rack occupies >70%% width and >500pt height, responsive resize, floating EQ and Spatial close/reopen");
     // Exercise the installed menu after launch, rather than calling the action directly.
     NSMenu* commands=NSApp.mainMenu.itemArray.firstObject.submenu;
+    NSInteger aboutItem=[commands indexOfItemWithTarget:app andAction:@selector(showAbout:)];assert(aboutItem>=0);
+    [commands performActionForItemAtIndex:aboutItem];NSPanel* about=[app valueForKey:@"aboutPanel"];assert(about.visible);
+    bool foundVersion=false;NSString* expected=NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"]?:@"Development";
+    for(NSView* view in about.contentView.subviews)if([view.identifier isEqualToString:@"about-version"]){assert([((NSTextField*)view).stringValue containsString:expected]);foundVersion=true;}
+    assert(foundVersion);[about close];[commands performActionForItemAtIndex:aboutItem];assert(about.visible);[about close];
     NSInteger diagnosticItem=[commands indexOfItemWithTarget:app andAction:@selector(showDiagnostics:)];
     NSInteger legacyItem=[commands indexOfItemWithTarget:app andAction:@selector(selectLegacy:)];
     assert(diagnosticItem>=0 && legacyItem>=0);
@@ -29,5 +34,16 @@ int main(){@autoreleasepool{
     [commands performActionForItemAtIndex:legacyItem];assert([[app valueForKey:@"legacyRateRequested"] boolValue] && legacy.state==NSControlStateValueOn);
     [commands performActionForItemAtIndex:legacyItem];assert(![[app valueForKey:@"legacyRateRequested"] boolValue] && legacy.state==NSControlStateValueOff);
     NSLog(@"PASS: installed Diagnostics menu action/shortcut and Legacy checkbox toggle survive launch");
+    NSMutableDictionary* settings=[@{@"inputDB":@5.5,@"masterDB":@(-18.25),@"geq":@{@"bands":@[@1,@2,@3,@4,@5,@6,@7,@8,@9,@10,@11,@12,@0,@(-1),@(-2)],@"bypass":@YES},@"limiterBypass":@YES,@"spatial":@{@"enabled":@YES,@"angle":@45,@"distance":@2,@"amount":@.7}} mutableCopy];
+    assert(([ui restoreRackDocument:@{@"version":@3,@"slots":@[],@"settings":settings}]));
+    assert(((DARGainKnob*)[app valueForKey:@"savedInputKnob"]).floatValue==5.5f);
+    assert(((DARGainKnob*)[app valueForKey:@"savedOutputKnob"]).floatValue==-18.25f);
+    assert(((NSButton*)[app valueForKey:@"savedEQBypass"]).state==NSControlStateValueOn);
+    assert(((NSButton*)[app valueForKey:@"savedLimiterBypass"]).state==NSControlStateValueOn);
+    assert(((NSButton*)[app valueForKey:@"savedSpatialEnabled"]).state==NSControlStateValueOn);
+    assert([((NSButton*)[app valueForKey:@"spatialSummary"]).title containsString:@"CROSSFEED"]);
+    assert([((NSButton*)[app valueForKey:@"eqSummary"]).title containsString:@"BYPASS"]);
+    NSDictionary* saved=[ui rackDocument];assert([saved[@"version"] isEqual:@4]&&[saved[@"settings"][@"inputDB"] floatValue]==5.5f&&[saved[@"settings"][@"spatial"][@"angle"] floatValue]==45);
+    NSLog(@"PASS: full settings restore updates knobs, EQ/limiter/spatial toggles and summaries; save snapshots restored values");
     [ui closeEditors];
 }}

@@ -1,3 +1,6 @@
+#ifdef DAR_ENABLE_VST3
+#include "plugins/VST3Host.hpp"
+#endif
 #import <Cocoa/Cocoa.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreMedia/CoreMedia.h>
@@ -28,14 +31,18 @@
     AURack auRack;
     std::unique_ptr<ProcessTap> processTap;
     BOOL systemTapSelected;
+    NSPanel* aboutPanel;
     NSPanel* diagnosticsPanel;
     NSTextView* diagnosticsText;
+    NSMutableArray<NSString*>* recoveryHistory;
     BOOL legacyRateRequested;
     std::string clockSummary;
     ClockDescription sourceClockDescription,aggregateClockDescription,outputClockDescription;
     ClockEstimator captureClockEstimate,outputClockEstimate;
     double clockSecondsPerTick;
     AURackUI* auUI;
+    DARGainKnob *savedInputKnob,*savedOutputKnob;
+    NSButton *savedEQBypass,*savedLimiterBypass,*savedSpatialEnabled;
     std::unique_ptr<Output> output;
     dispatch_queue_t captureQueue;
     SCStream* stream;
@@ -71,6 +78,7 @@
     (void)note;
     NSString* iconPath=[NSBundle.mainBundle pathForResource:@"AppIcon" ofType:@"icns"];
     if(iconPath){NSImage* icon=[[NSImage alloc] initWithContentsOfFile:iconPath];if(icon)NSApp.applicationIconImage=icon;}
+    recoveryHistory=[NSMutableArray new];
     legacyRateRequested=NO; // Auto adapter adopted after user-confirmed AudioFuse playback.
     processTap=std::make_unique<ProcessTap>(bridge);
     bridge.rack=&auRack;
@@ -79,9 +87,12 @@
     __weak RackApp* weakSelf=self;
     auUI.beforeEdit=^{ [weakSelf beginRackEdit]; };
     auUI.afterEdit=^{ [weakSelf endRackEdit]; };
+    [auUI setDSPParameters:&bridge.parameters spatialParameters:&bridge.spatialParameters];
+    auUI.settingsDidLoad=^{ [weakSelf refreshSavedControls]; };
     captureQueue=dispatch_queue_create("audio.rack.capture",DISPATCH_QUEUE_SERIAL);
     mach_timebase_info_data_t clockBase{};mach_timebase_info(&clockBase);clockSecondsPerTick=double(clockBase.numer)/clockBase.denom/1e9;
     NSMenu* appMenu=[NSMenu new];NSMenuItem* appItem=[NSMenuItem new];[appMenu addItem:appItem];NSMenu* commands=[NSMenu new];appItem.submenu=commands;
+    NSMenuItem* about=[[NSMenuItem alloc] initWithTitle:@"About The Dutchman BOX/DAR…" action:@selector(showAbout:) keyEquivalent:@""];about.target=self;[commands addItem:about];[commands addItem:NSMenuItem.separatorItem];
     NSMenuItem* diagnostics=[[NSMenuItem alloc] initWithTitle:@"Audio Engine Diagnostics…" action:@selector(showDiagnostics:) keyEquivalent:@"d"];diagnostics.keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagOption;diagnostics.target=self;[commands addItem:diagnostics];
     NSMenuItem* legacy=[[NSMenuItem alloc] initWithTitle:@"Legacy Linear (fallback; applies on next Start)" action:@selector(selectLegacy:) keyEquivalent:@""];legacy.target=self;legacy.state=NSControlStateValueOff;[commands addItem:legacy];[commands addItem:NSMenuItem.separatorItem];
     [commands addItemWithTitle:@"Quit The Dutchman" action:@selector(terminate:) keyEquivalent:@"q"];NSApp.mainMenu=appMenu;
@@ -124,6 +135,7 @@
     spatialView=[[DARSpatialView alloc] initWithParameters:&bridge.spatialParameters];spatialView.frame=NSMakeRect(0,40,760,480);[spatialCanvas addSubview:spatialView];
     NSButton* crossfeed=[NSButton checkboxWithTitle:@"Crossfeed 有効" target:self action:@selector(enableSpatial:)];crossfeed.frame=NSMakeRect(18,8,180,24);[spatialCanvas addSubview:crossfeed];
     NSButton* resetField=[self button:@"Reset Field" action:@selector(resetSpatial:)];resetField.frame=NSMakeRect(206,6,124,28);[spatialCanvas addSubview:resetField];
+    savedInputKnob=inKnob;savedOutputKnob=outKnob;savedEQBypass=eqBypass;savedLimiterBypass=limiter;savedSpatialEnabled=crossfeed;
     meters=[NSTextField labelWithString:@"Stopped"];meters.font=[NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];meters.textColor=DARColor(0x9CAEC5);add(meters);
     status=[NSTextField labelWithString:@"停止中"];status.font=[NSFont systemFontOfSize:10];status.textColor=DARAmber();add(status);
     __weak DARDocument* weakCanvas=canvas;
@@ -142,12 +154,13 @@
     };
     canvas.arrange(canvas.bounds.size);
     [self refresh:nil];
-    if(NSProcessInfo.processInfo.arguments.count==3 && ([NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--preview"] || [NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--spatial-preview"])) {
+    if(NSProcessInfo.processInfo.arguments.count==3 && ([NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--about-preview"] || [NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--preview"] || [NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--spatial-preview"])) {
         for(int i=0;i<4;++i){auto unit=std::make_unique<AUEffect>(AUChoice{{kAudioUnitType_Effect,kAudioUnitSubType_HighPassFilter,kAudioUnitManufacturer_Apple,0,0},"Apple · AUHipass"});unit->prepare(48000);unit->markPreset("preview","Default");auRack.slots.push_back(std::move(unit));}
         [auUI rebuild];
         [window center];[window makeKeyAndOrderFront:nil];[NSApp activateIgnoringOtherApps:YES];
         NSWindow* previewWindow=window;
         if([NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--spatial-preview"]){[self showSpatial:nil];previewWindow=spatialPanel;}
+        if([NSProcessInfo.processInfo.arguments[1] isEqualToString:@"--about-preview"]){[self showAbout:nil];previewWindow=aboutPanel;}
         NSLog(@"Rendering UI preview");
         {
             [previewWindow.contentView layoutSubtreeIfNeeded];
@@ -169,6 +182,30 @@
     [window center]; [window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
 }
 - (void)showSpatial:(id)sender { [spatialPanel center];[spatialPanel makeKeyAndOrderFront:nil]; }
+- (void)showAbout:(id)sender {
+    if(!aboutPanel){
+        NSDictionary* bundle=NSBundle.mainBundle.infoDictionary;
+        NSString* version=bundle[@"CFBundleShortVersionString"]?:@"Development";
+        NSString* build=bundle[@"CFBundleVersion"]?:@"—";
+        aboutPanel=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,450,235) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+        aboutPanel.releasedWhenClosed=NO;aboutPanel.title=@"About The Dutchman BOX/DAR";aboutPanel.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];aboutPanel.backgroundColor=DARDeep();
+        NSImageView* icon=[[NSImageView alloc] initWithFrame:NSMakeRect(185,132,80,80)];icon.image=NSApp.applicationIconImage;[aboutPanel.contentView addSubview:icon];
+        NSTextField* name=[NSTextField labelWithString:@"The Dutchman BOX/DAR"];name.font=[NSFont boldSystemFontOfSize:20];name.textColor=NSColor.whiteColor;name.alignment=NSTextAlignmentCenter;name.frame=NSMakeRect(12,94,426,28);[aboutPanel.contentView addSubview:name];
+        NSTextField* versionLabel=[NSTextField labelWithString:[NSString stringWithFormat:@"Version %@ (Build %@)",version,build]];versionLabel.identifier=@"about-version";versionLabel.textColor=DARAmber();versionLabel.alignment=NSTextAlignmentCenter;versionLabel.frame=NSMakeRect(12,62,426,24);[aboutPanel.contentView addSubview:versionLabel];
+        NSTextField* description=[NSTextField labelWithString:@"Desktop Audio Rack · AU / VST3"];description.textColor=NSColor.secondaryLabelColor;description.alignment=NSTextAlignmentCenter;description.frame=NSMakeRect(12,28,426,22);[aboutPanel.contentView addSubview:description];
+        [aboutPanel center];
+    }
+    [aboutPanel makeKeyAndOrderFront:nil];
+}
+- (void)refreshSavedControls {
+    savedInputKnob.floatValue=bridge.parameters.inputDB;savedOutputKnob.floatValue=bridge.parameters.masterDB;
+    savedEQBypass.state=bridge.parameters.eqBypass?NSControlStateValueOn:NSControlStateValueOff;
+    savedLimiterBypass.state=bridge.parameters.limiterBypass?NSControlStateValueOn:NSControlStateValueOff;
+    savedSpatialEnabled.state=bridge.spatialParameters.enabled?NSControlStateValueOn:NSControlStateValueOff;
+    geq.needsDisplay=YES;eqMini.needsDisplay=YES;spatialView.needsDisplay=YES;
+    eqSummary.title=bridge.parameters.eqBypass?@"MASTER EQ · BYPASS  ▸":@"MASTER EQ  ▸";
+    spatialSummary.title=bridge.spatialParameters.enabled?@"SPATIAL · CROSSFEED  ▸":@"SPATIAL · OFF  ▸";
+}
 - (void)enableSpatial:(NSButton*)sender { bridge.spatialParameters.enabled=sender.state==NSControlStateValueOn;spatialView.needsDisplay=YES;spatialSummary.title=bridge.spatialParameters.enabled?@"SPATIAL · CROSSFEED  ▸":@"SPATIAL · OFF  ▸"; }
 - (void)resetSpatial:(id)sender { [spatialView resetField]; }
 - (void)showEQ:(id)sender { [eqPanel center];[eqPanel makeKeyAndOrderFront:nil]; }
@@ -244,7 +281,7 @@
 - (void)toggle:(id)sender {
     if(running) { [self stopWithMessage:@"停止中"]; return; }
     if(busy || (!selectedFilter && !systemTapSelected) || !devices.selectedItem) return;
-    busy=YES; bridge.reset(); [inputView clearHold]; [outputView clearHold]; [self controls];
+    busy=YES; [recoveryHistory removeAllObjects];bridge.reset(); [inputView clearHold]; [outputView clearHold]; [self controls];
     activeDevice=[devices.selectedItem.representedObject unsignedIntValue];
     OSStatus result=output->start(activeDevice);
     if(result) { busy=NO; status.stringValue=[NSString stringWithFormat:@"出力開始失敗: %d",(int)result]; [self controls]; return; }
@@ -321,8 +358,17 @@
         if(!clockConfigurationMatches(outputClockDescription)||(systemTapSelected&&(!clockConfigurationMatches(sourceClockDescription)||!clockConfigurationMatches(aggregateClockDescription)))){[self stopWithMessage:@"Clock/rate configuration changed; Start to re-prepare adapter."];return;}
         captureClockEstimate.update(bridge.captureTimestamp,clockSecondsPerTick);outputClockEstimate.update(bridge.outputTimestamp,clockSecondsPerTick);
         if(captureClockEstimate.estimatedRate && outputClockEstimate.estimatedRate){double ppm=(captureClockEstimate.estimatedRate/outputClockEstimate.estimatedRate/(bridge.captureRate.load()/output->rate)-1)*1e6;if(std::isfinite(ppm)&&std::abs(ppm)<1000)bridge.feedForwardPPM=ppm;}
+        RecoveryEvent event;
+        for(int drained=0;drained<128 && bridge.recoveryEvents.pop(event);++drained){
+            const char* kind=event.reason==RecoveryReason::InputLookaheadShortage?"INPUT_LOOKAHEAD_SHORTAGE":event.reason==RecoveryReason::ExcessBacklog?"EXCESS_BACKLOG":"REPRIMED";
+            uint64_t snapshotAvailable=event.snapshotWrite>=event.cursor?event.snapshotWrite-event.cursor:0,liveAvailable=event.liveWrite>=event.cursor?event.liveWrite-event.cursor:0;
+            NSString* row=[NSString stringWithFormat:@"%s host=%llu block=%llu frame=%u/%u entryFill=%.3f cursor=%llu+%.6f frozenAvailable=%llu liveAvailable=%llu required=%u zeroInputRemaining=%u\n  ratio=%.12f ppm(end)=%+.3f ff=%+.3f P=%+.3f I=%+.3f desired=%+.3f filteredFill=%.3f\n  captureAge=%.3fms lastCaptureGap=%.3fms lastOutputGap=%.3fms renderThis=%.3fms prevCallback=%.3fms sourceSampleJumps=%llu outputSampleJumps=%llu sincePlannedResume=%.3fs",kind,event.host,event.outputBlock,event.frameInBlock,event.frames,event.fillAtEntry,event.cursor,event.phase,snapshotAvailable,liveAvailable,event.neededInput,event.zeroInputFrames,event.ratio,event.correctionPPM,event.feedForwardPPM,event.proportionalPPM,event.integralPPM,event.desiredPPM,event.filteredFill,event.captureAgeTicks*clockSecondsPerTick*1000,event.captureGapTicks*clockSecondsPerTick*1000,event.outputGapTicks*clockSecondsPerTick*1000,event.currentRenderNS/1e6,event.previousRenderNS/1e6,event.captureSampleJumps,event.outputSampleJumps,event.lastPlannedResume?(event.host-event.lastPlannedResume)*clockSecondsPerTick:-1.];
+            [recoveryHistory addObject:row];if(recoveryHistory.count>64)[recoveryHistory removeObjectAtIndex:0];
+        }
         if(diagnosticsPanel.visible){auto& d=bridge.rateAdapter.telemetry;auto& t=bridge.callbackTiming;uint64_t count=t.count.load();
             diagnosticsText.string=[NSString stringWithFormat:@"%s\nCapture nominal %.2f Hz / Output %.2f Hz\nTimestamp estimated %.5f / %.5f Hz (0 = unavailable or warming up)\nMode %s / ratio %.12f input frames per output frame / correction %+.4f ppm\nRing effective fill %.2f / target %zu (retained history included in raw queued: %llu)\nFill range %.2f .. %.2f\nSRC kernel latency %.4f ms / lookahead-priming %zu input frames / %zu taps\nUnderrun %llu / Overrun %llu / recoveries %llu\nCallback count %llu / mean %.3f us / max %.3f us\nHistogram upper-bound p95 %.3f / p99 %.3f / p99.9 %.3f us\n\nNo audio-thread file I/O. Legacy selection applies on next Start.\nReported device clocks above are startup snapshots.\n",clockSummary.c_str(),bridge.captureRate.load(),output->rate,captureClockEstimate.estimatedRate,outputClockEstimate.estimatedRate,rateModeName(bridge.rateAdapter.mode()),d.ratio.load(),d.ppm.load(),d.fill.load(),bridge.rateAdapter.targetFill(),bridge.queued(),d.minFill.load(),d.maxFill.load(),d.latencyMS.load(),bridge.rateAdapter.lookahead(),bridge.rateAdapter.taps(),bridge.underruns.load(),bridge.overruns.load(),d.recoveries.load(),count,count?t.totalNS.load()/double(count)/1000:0,t.maxNS.load()/1000.,t.percentileUS(.95),t.percentileUS(.99),t.percentileUS(.999)];
+            NSString* observations=[NSString stringWithFormat:@"\nObservation only (SRC/controller decisions unchanged)\nActive minimum entry fill %.3f (original Fill range above includes startup)\nController ff %+.3f / P %+.3f / I %+.3f / desired %+.3f ppm / filtered fill %.3f\nCapture entry gap last/max %.3f / %.3fms; long-gap candidates %llu; sampleTime jumps %llu\nOutput entry gap last/max %.3f / %.3fms; long-gap candidates %llu; sampleTime jumps %llu\nSource zero-input frames before AU: startup %llu / after recovery %llu\nEvent records retained %lu / discarded by RT queue %llu\nEntry gaps include scheduling and planned pauses; not OS XRun counters.\nRecent events (oldest first; copy this text after a new event):\n%@",d.activeMinFill.load(),d.feedForwardPPM.load(),d.proportionalPPM.load(),d.integralPPM.load(),d.desiredPPM.load(),d.filteredFill.load(),bridge.captureActivity.lastGapTicks.load()*clockSecondsPerTick*1000,bridge.captureActivity.maxGapTicks.load()*clockSecondsPerTick*1000,bridge.captureActivity.longGaps.load(),bridge.captureActivity.sampleJumps.load(),bridge.outputActivity.lastGapTicks.load()*clockSecondsPerTick*1000,bridge.outputActivity.maxGapTicks.load()*clockSecondsPerTick*1000,bridge.outputActivity.longGaps.load(),bridge.outputActivity.sampleJumps.load(),bridge.initialZeroInputFrames.load(),bridge.recoveryZeroInputFrames.load(),(unsigned long)recoveryHistory.count,bridge.recoveryEvents.dropped.load(),[recoveryHistory componentsJoinedByString:@"\n\n"]];
+            diagnosticsText.string=[diagnosticsText.string stringByAppendingString:observations];
         }
 
         AudioObjectPropertyAddress a{kAudioDevicePropertyDeviceIsAlive,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain}; UInt32 alive=0,size=sizeof(alive);
@@ -334,4 +380,8 @@
     }
 }
 @end
-int main() { @autoreleasepool { NSApplication* app=NSApplication.sharedApplication; app.activationPolicy=NSApplicationActivationPolicyRegular; RackApp* delegate=[RackApp new]; app.delegate=delegate; [app run]; return 0; } }
+int main(int argc,char** argv) {
+#ifdef DAR_ENABLE_VST3
+    if(argc==3 && !strcmp(argv[1],"--vst3-probe")) return runVST3Probe(argv[2]);
+#endif
+ @autoreleasepool { NSApplication* app=NSApplication.sharedApplication; app.activationPolicy=NSApplicationActivationPolicyRegular; RackApp* delegate=[RackApp new]; app.delegate=delegate; [app run]; return 0; } }

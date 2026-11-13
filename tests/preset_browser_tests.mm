@@ -7,8 +7,8 @@
 - (NSArray*)presetOptions:(NSInteger)index;
 - (NSMenu*)presetMenuForIndex:(NSInteger)index;
 - (void)stepPreset:(NSInteger)index direction:(NSInteger)direction;
-- (NSDictionary*)presetMetadata:(AUEffect*)slot;
-- (void)restorePresetMetadata:(id)data slot:(AUEffect*)slot;
+- (NSDictionary*)presetMetadata:(RackEffect*)slot;
+- (void)restorePresetMetadata:(id)data slot:(RackEffect*)slot;
 @end
 @interface TestBrowser : AURackUI
 @property(strong) NSArray* testOptions;
@@ -16,8 +16,8 @@
 @implementation TestBrowser
 - (NSArray*)presetOptions:(NSInteger)index { return self.testOptions; }
 @end
-static void cutoff(AUEffect& unit,float value) { assert(AudioUnitSetParameter(unit.handle(),kHipassParam_CutoffFrequency,kAudioUnitScope_Global,0,value,0)==0); }
-static float cutoff(AUEffect& unit) {float value=0;assert(AudioUnitGetParameter(unit.handle(),kHipassParam_CutoffFrequency,kAudioUnitScope_Global,0,&value)==0);return value;}
+static void cutoff(RackEffect& unit,float value) { assert(AudioUnitSetParameter(unit.handle(),kHipassParam_CutoffFrequency,kAudioUnitScope_Global,0,value,0)==0); }
+static float cutoff(RackEffect& unit) {float value=0;assert(AudioUnitGetParameter(unit.handle(),kHipassParam_CutoffFrequency,kAudioUnitScope_Global,0,&value)==0);return value;}
 static int checked(NSMenu* menu) {int count=0;for(NSMenuItem* item in menu.itemArray) {if(item.state==NSControlStateValueOn)++count;if(item.submenu)count+=checked(item.submenu);}return count;}
 int main(){@autoreleasepool {
     [NSApplication sharedApplication];AURack rack;

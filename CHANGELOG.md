@@ -1,3 +1,51 @@
+## 0.0.28 — Cached VST3 discovery
+- 起動時にVST3キャッシュを即時使用し、追加/更新/削除だけバックグラウンドで確認。
+- 変更なし/失敗済みバンドルを再ロードせず、手動Scanは全件再スキャン。
+- スキャン中もラック編集可能。スキャンボタンの二重実行防止。表示中メニューは候補IDを保持し、差分更新で別のプラグインを選ばないよう対応。
+- キャッシュ破損復旧、ネストしたバイナリ変更、追加/削除、負キャッシュ、強制再読込を検証。音声スレッドにIO追加なし。
+
+## 0.0.27 — Fixed insert slots
+- 空き枠へ移動、使用中の枠とは交換。削除時に詰めず、Addはクリックした枠へ挿入。
+- 空きを含むv4保存/復元。v1〜v3互換。音声処理・メーター・GUI更新は空き枠をスキップ。
+- 空き位置追加/交換/削除、native drop、保存往復、旧形式、空き枠の音声通過を検証。
+
+## 0.0.26 — Rack interaction / About
+- 挿入済みのプラグイン名をクリックしてAU/VST3を差し替え。8枠使用中でも可能。初期化失敗は元を保持し、Bypassを継承。
+- 番号・プラグイン名からネイティブDrag & Dropで並べ替え。挿入線、同一ラック/世代検証、編集中の拒否、ドラッグ元の寿命保持を追加。
+- アプリケーションメニューへAboutを追加。Bundleのversion/buildを表示。
+- 差し替え・DnD受け渡し・旧payload拒否・設定保存回帰・Aboutメニューを検証。SRC/DSP処理変更なし。
+
+## 0.0.25 — VST3 auxiliary bus compatibility
+- Neutronの追加サイドチェイン入力を理由にステレオ初期化を拒否していた問題を修正。
+- メイン入出力はFloat32 Stereoを維持し、補助バスは宣言されたlayoutを保持して明示的に無効化。全バス分の固定メタデータ/ポインタ配列を事前確保。
+- エラー段階名がcontroller.initializeのまま残る表示を修正。
+- Neutron 3 Elements実機で再現→修正後の処理/GUIを確認。補助入力付きfixtureでheadroom/bypass/state/rate/heap回帰を検証。
+- 外部サイドチェインのルーティングは未提供。SRC/AU/既存DSPアルゴリズムは変更なし。
+
+## 0.0.24 — Full rack settings
+- Save/Load the RackにInput/Output Gain、GEQ 15バンド/Bypass、Spatial enabled/angle/distance/amount、Limiter Bypassを追加（schema v3）。
+- 復元後にノブ・チェックボックス・EQ/音場表示も同期。Start/Stop、出力デバイス、Emergency Muteは維持。
+- v1/v2互換。旧形式では未保存設定を維持。不正設定・プラグイン復元失敗は全体を変更せず中止。
+- AU/VST3混在ファイル往復、旧形式、不正値/欠損、UI同期を検証。SRC/DSP方式は変更なし。
+
+## 0.0.23 — Rack controls fix
+- 再生中の定期controls更新でVST3プリセット欄が有効/無効を往復する点滅を修正。プリセット欄と±ボタンの可否を一箇所で管理。
+- 同じプリセット表示を毎回再設定せず、変更時だけ更新。
+- Save the Rack / Load the Rackへ名称変更。保存内容は従来どおりAU/VST3ラックのみ（Gain/GEQ/Spatialは未保存）。
+
+## 0.0.22 — VST3 first milestone
+- 固定版MIT VST3 SDKを導入。別プロセスでEffectをスキャンし、arm64/Float32/stereoで挿入時に検証。
+- AU/VST3共通のRackEffectへ所有・dispatchを分離。既存AU処理本体は変更なし。
+- VST3の音声処理、GUIパラメータ転送、純正NSViewフロート表示、Bypass・並べ替え・削除・状態保存復元。
+- VST3プリセットはメーカーGUI内で選択。Intel/Rosetta、Instrument、追加音声バス、完全なlive IO再構成は未対応。
+- 決定的なテスト用VST3、混在ラック回帰、実プラグインのGUI/処理スモークテストを追加。SRC/DSPアルゴリズム変更なし。
+
+## 0.0.21 — Recovery diagnostics
+- SRC/PI/DSP/音声の挙動は変えず、先読み不足・再priming・過剰backlogのイベント観測を追加。
+- Capture/Outputの到着間隔、timestamp連続性、PI内訳、固定/最新write位置、ゼロ入力補充を表示。
+- 固定write snapshotとqueue transient後のratio応答遅延を再現。実機5回の原因特定は新イベント記録待ち。
+- 0.0.20との4モード・450万サンプルの音声byte一致を確認。
+
 ## 0.0.20
 - ネイビーの3段ラックとCrimson/Amberストライプをモチーフにしたアプリアイコンを追加。
 - 16〜1024pxのmacOS .icnsを生成し、shell/CMake両方のbundleへ組み込み。

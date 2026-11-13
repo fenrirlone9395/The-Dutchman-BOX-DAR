@@ -85,11 +85,12 @@ OSStatus AUEffect::restore(CFPropertyListRef state) {
     OSStatus s=AudioUnitSetProperty(unit,kAudioUnitProperty_ClassInfo,kAudioUnitScope_Global,0,&state,sizeof(state));
     if(s) error=s; return s;
 }
-int AURack::prepare(double rate) { for(auto& slot:slots) slot->prepare(rate); return 0; }
+int AURack::prepare(double rate) { for(auto& slot:slots) if(slot)slot->prepare(rate); return 0; }
 void AURack::process(float* l,float* r,size_t frames) {
     for(size_t offset=0;offset<frames;offset+=4096) {
         UInt32 n=UInt32(std::min(size_t(4096),frames-offset));
         for(auto& slot:slots) {
+            if(!slot)continue;
             slot->process(l+offset,r+offset,n);
             float a=0,b=0;for(UInt32 i=0;i<n;++i){a=std::max(a,std::abs(l[offset+i]));b=std::max(b,std::abs(r[offset+i]));}
             slot->outputMeter.publish(a,b);

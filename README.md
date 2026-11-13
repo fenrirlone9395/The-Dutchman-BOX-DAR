@@ -1,3 +1,67 @@
+# 0.0.28 — Cached VST3 discovery
+
+起動直後は前回のVST3一覧をキャッシュから表示し、バックグラウンドで追加・更新・削除を確認します。バンドル内のファイル構成・サイズ・更新日時・シンボリックリンク情報を照合し、新規/変更分だけ別プロセスでスキャンします。初回・キャッシュ破損時は全件確認します。
+
+**Scan VST3** はキャッシュを無視した全件再スキャンです。認証変更などで候補が出ない時はこちらを使ってください。失敗したバンドルも結果を記録し、変更なしなら起動ごとに再試行しません。削除された候補は差分確認後に一覧から除きます。スキャン中も既存候補の使用・ラック編集・再生を継続できます。
+
+キャッシュは `~/Library/Caches/local.ryuji.DesktopAudioRack/VST3Catalog-v1.plist`。更新はatomic書込。音声スレッドでディスク確認・スキャン・キャッシュ読書きは行いません。稼働中のAU/VST3、SRC/DSP方式とラック保存内容は変更なし。
+
+---
+
+# 0.0.27 — Fixed insert slots
+
+8枠をDAWのインサートのような固定位置として扱います。ドラッグ先が空きなら移動、使用中なら2枠を交換します。削除しても後ろを詰めません。空き枠のAddからは、その位置へ挿入します。↑↓も隣の枠との交換です。
+
+Save/Loadは空き位置も保持するv4形式になりました。旧v1〜v3も読込可能です。Gain/GEQ/Spatialの保存とミュート状態の維持は継続。空き枠は音声処理を行いません。
+
+---
+
+# 0.0.26 — Rack interaction / About
+
+挿入済みの**プラグイン名をクリック**すると、その位置のプラグイン選択メニューが開きます。8枠が埋まっていても差し替え可能。新候補の初期化に失敗した場合は元のプラグインを維持し、成功時もスロットのBypass状態は引き継ぎます。
+
+**左の番号またはプラグイン名をドラッグ**し、移動先の上下に出る黄色い挿入線へドロップすると順番を変更できます。空き枠へのドロップは末尾への移動になります。↑↓ボタンも引き続き使えます。
+
+アプリケーションメニューの **About The Dutchman BOX/DAR…** にバージョンとビルド番号を表示します。再生中の差し替え・並べ替えは既存の出力pause/resume境界を使用。Gain/GEQ/Spatialの設定とEmergency Muteは維持し、SRC/DSP方式は変更していません。
+
+---
+
+# 0.0.25 — Neutron VST3 compatibility
+
+Neutronなどの補助サイドチェイン入力を持つVST3を、通常のステレオEffectとして読み込めるように修正。補助バスは明示的に無効化し、メイン信号経路を使用します。外部サイドチェインのルーティングは未実装です。初期化エラーには実際に失敗した段階を表示します。
+
+---
+
+# 0.0.24 — Full rack settings
+
+**Save the Rack** でAU/VST3に加えてInput/Output Gain、GEQ全15バンドとBypass、Spatialの有効状態・角度・距離・量、Limiter Bypassもまとめて保存します。**Load the Rack** で音声設定と画面表示を復元します。
+
+旧v1/v2ラックも読み込めます。その場合、ファイルにないGain/GEQ/Spatial設定は現在値を維持します。新形式はv3で、旧アプリでは読み込めません。不正な設定やプラグイン復元失敗時は、現在のラック・設定を維持します。出力デバイス、Start/Stop、Emergency Mute状態は保存・変更しません。自動起動時復元ではなく、既存のSave/Load操作による保存です。SRC/DSPの処理方式は変更していません。
+
+---
+
+# 0.0.23 — Rack controls fix
+
+VST3プリセット欄の再生中の点滅を修正。保存・読込は **Save the Rack / Load the Rack** に改称しました。保存対象はAU/VST3スロットの順序・Bypass・プラグイン状態です。Input/Master Gain、GEQ、Spatialの保存はまだ含みません。
+
+---
+
+# 0.0.22 — VST3 first milestone
+
+**Scan VST3 → Add an effect → VST3** から、Apple SiliconネイティブのステレオEffectを追加できます。Editorはフロート表示。AUとの混在、Bypass、並べ替え、既存のSave/Loadに対応します。VST3のプリセットは当面メーカーGUI内で選択してください。
+
+初回のみ `bash scripts/setup-vst3.sh` でMITライセンスの固定版SDKを取得後、`bash scripts/build.sh`。Intel専用VST3・Instrument・追加音声バスは今回の対象外です。スキャン候補と、実際に挿せるプラグインは異なります。[対応範囲・検証・制限](docs/vst3/PHASE1.md)。SRC/GEQ/Crossfeed/Limiterのアルゴリズムは変更していません。
+
+---
+
+# 0.0.21 — Recovery investigation / observation only
+
+長時間試験のUnderrun/Recovery調査用。SRC係数・音声DSP・PI/ratio制御・バッファ判定は変更せず、イベント前後の観測を追加しました。[調査結果と再現試験](docs/recovery-investigation/REPORT.md)。Auto/ASRC既定は維持しています。
+
+Diagnosticsの末尾に、入力／出力の到着間隔、PI制御内訳、必要先読み量、ブロック先頭の固定書込位置とイベント時の最新書込位置、ゼロ補充フレーム数、最近64イベントを表示します。次に増加した時は、再生中のDiagnostics全文をコピーしてください。音声ファイルやログファイルをAudio Threadで生成しません。
+
+---
+
 # 0.0.20 — App icon
 
 BOXのラックをモチーフにしたmacOSアイコンを追加しました。原画はassets/AppIcon-source.png、生成プロンプトはassets/AppIcon-generation.json、配布リソースはResources/AppIcon.icnsです。通常ビルド時に必要なら再生成します。Audio EngineはAuto / ASRC既定のままです。
@@ -96,7 +160,7 @@ macOSで再生している音を、好きなAudio Unitへ通して聴くため�
 
 ## 現在のバージョン
 
-**0.0.20** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
+**0.0.21** — Apple Silicon / macOS 14以降。元音声をミュートするSystem AudioモードはmacOS 14.2以降。
 
 - System AudioをCore Audio Process Tapで取得。取得中は元音声をミュートし、自アプリの出力は除外。
 - アプリ単位の取得はScreenCaptureKitの標準ピッカーを使用。
