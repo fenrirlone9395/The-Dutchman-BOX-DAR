@@ -41,7 +41,10 @@ public:
 class AUEffect : public RackEffect {
     static constexpr UInt32 maximumFrames=4096;
     AudioUnit unit=nullptr;
-    std::array<float,maximumFrames> scratchL{},scratchR{},inputL{},inputR{};
+    std::array<float,maximumFrames> scratchL{},scratchR{},inputL{},inputR{},silence{};
+    std::array<UInt32,8> inputChannels{};
+    UInt32 inputCount=0;
+    const char* stage="not prepared";
     float *sourceL=nullptr,*sourceR=nullptr;
     UInt32 sourceFrames=0;
     double time=0;
@@ -55,6 +58,7 @@ public:
     OSStatus prepare(double) override;
     void process(float*,float*,UInt32) override;
     AudioUnit handle() const override { return unit; }
+    const char* errorDetail() const override {return stage;}
     double latency() const override;
     std::vector<AUFactoryPreset> factoryPresets() const override;
     OSStatus applyFactoryPreset(SInt32 number) override; // Output must be paused.

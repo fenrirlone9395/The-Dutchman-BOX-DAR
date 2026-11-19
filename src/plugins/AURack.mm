@@ -18,41 +18,69 @@ std::vector<AUChoice> scanAUEffects() {
     std::sort(result.begin(),result.end(),[](auto& a,auto& b){return a.name<b.name;}); return result;
 }
 AUEffect::~AUEffect() { if(unit) { if(initialized) AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); } }
-OSStatus AUEffect::input(void* context,AudioUnitRenderActionFlags*,const AudioTimeStamp*,UInt32 bus,UInt32 frames,AudioBufferList* data) {
+OSStatus AUEffect::input(void* context,AudioUnitRenderActionFlags* flags,const AudioTimeStamp*,UInt32 bus,UInt32 frames,AudioBufferList* data) {
     auto* self=static_cast<AUEffect*>(context);
-    if(bus || frames>self->sourceFrames || data->mNumberBuffers!=2) return kAudio_ParamError;
-    float* src[2]{self->sourceL,self->sourceR};
-    for(UInt32 ch=0;ch<2;++ch) {
-        auto& b=data->mBuffers[ch];
-        if(b.mData) { if(b.mDataByteSize<frames*4) return kAudio_ParamError; memcpy(b.mData,src[ch],frames*4); }
-        else b.mData=src[ch];
-        b.mDataByteSize=frames*4; b.mNumberChannels=1;
+    if(!data || bus>=self->inputCount || frames>self->sourceFrames || data->mNumberBuffers!=self->inputChannels[bus])return kAudio_ParamError;
+    for(UInt32 ch=0;ch<data->mNumberBuffers;++ch){
+        auto& buffer=data->mBuffers[ch];
+        const float* source=bus?self->silence.data():(ch?self->sourceR:self->sourceL);
+        if(!source)return kAudio_ParamError;
+        if(buffer.mData){
+            if(buffer.mDataByteSize<frames*sizeof(float))return kAudio_ParamError;
+            if(bus)memset(buffer.mData,0,frames*sizeof(float));
+            else memcpy(buffer.mData,source,frames*sizeof(float));
+        }else buffer.mData=const_cast<float*>(source);
+        buffer.mDataByteSize=frames*sizeof(float);buffer.mNumberChannels=1;
     }
+    if(bus && flags)*flags|=kAudioUnitRenderAction_OutputIsSilence;
     return noErr;
 }
 OSStatus AUEffect::prepare(double rate) {
-    error=0; time=0;
-    if(!unit) {
+    error=0;time=0;
+    stage="sample rate";
+    if(!std::isfinite(rate) || rate<8000 || rate>192000)return error=kAudio_ParamError;
+    if(!unit){
+        stage="component lookup";
         auto component=AudioComponentFindNext(nullptr,&choice.description);
-        if(!component) return error=kAudio_ParamError;
-        OSStatus s=AudioComponentInstanceNew(component,&unit); if(s) return error=s;
+        if(!component)return error=kAudio_ParamError;
+        stage="component creation";
+        OSStatus s=AudioComponentInstanceNew(component,&unit);if(s)return error=s;
     }
-    if(initialized) { AudioUnitUninitialize(unit); initialized=false; }
-    UInt32 count=0,size=sizeof(count);
-    for(auto scope:{kAudioUnitScope_Input,kAudioUnitScope_Output}) {
-        OSStatus s=AudioUnitGetProperty(unit,kAudioUnitProperty_ElementCount,scope,0,&count,&size);
-        if(s || count!=1) return error=s?s:kAudioUnitErr_FormatNotSupported;
-    }
+    if(initialized){AudioUnitUninitialize(unit);initialized=false;}
+    stage="input bus count";
+    UInt32 size=sizeof(inputCount);
+    OSStatus s=AudioUnitGetProperty(unit,kAudioUnitProperty_ElementCount,kAudioUnitScope_Input,0,&inputCount,&size);
+    if(s || !inputCount || inputCount>inputChannels.size())return error=s?s:kAudioUnitErr_FormatNotSupported;
+    stage="output bus count";
+    UInt32 outputCount=0;size=sizeof(outputCount);
+    s=AudioUnitGetProperty(unit,kAudioUnitProperty_ElementCount,kAudioUnitScope_Output,0,&outputCount,&size);
+    if(s || outputCount!=1)return error=s?s:kAudioUnitErr_FormatNotSupported;
     AudioStreamBasicDescription f{rate,kAudioFormatLinearPCM,AudioFormatFlags(kAudioFormatFlagsNativeFloatPacked)|AudioFormatFlags(kAudioFormatFlagIsNonInterleaved),4,1,4,2,32,0};
-    for(auto scope:{kAudioUnitScope_Input,kAudioUnitScope_Output}) {
-        OSStatus s=AudioUnitSetProperty(unit,kAudioUnitProperty_StreamFormat,scope,0,&f,sizeof(f)); if(s) return error=s;
+    for(auto scope:{kAudioUnitScope_Input,kAudioUnitScope_Output}){
+        stage=scope==kAudioUnitScope_Input?"main input format":"main output format";
+        s=AudioUnitSetProperty(unit,kAudioUnitProperty_StreamFormat,scope,0,&f,sizeof(f));if(s)return error=s;
     }
+    inputChannels[0]=2;
+    for(UInt32 bus=1;bus<inputCount;++bus){
+        stage="auxiliary input format";
+        AudioStreamBasicDescription auxiliary{};size=sizeof(auxiliary);
+        s=AudioUnitGetProperty(unit,kAudioUnitProperty_StreamFormat,kAudioUnitScope_Input,bus,&auxiliary,&size);
+        if(s || !auxiliary.mChannelsPerFrame || auxiliary.mChannelsPerFrame>64)return error=s?s:kAudioUnitErr_FormatNotSupported;
+        inputChannels[bus]=auxiliary.mChannelsPerFrame;
+        auxiliary=f;auxiliary.mChannelsPerFrame=inputChannels[bus];
+        s=AudioUnitSetProperty(unit,kAudioUnitProperty_StreamFormat,kAudioUnitScope_Input,bus,&auxiliary,sizeof(auxiliary));if(s)return error=s;
+    }
+    stage="maximum frames";
     UInt32 max=maximumFrames;
-    OSStatus s=AudioUnitSetProperty(unit,kAudioUnitProperty_MaximumFramesPerSlice,kAudioUnitScope_Global,0,&max,sizeof(max)); if(s) return error=s;
-    AURenderCallbackStruct cb{input,this};
-    s=AudioUnitSetProperty(unit,kAudioUnitProperty_SetRenderCallback,kAudioUnitScope_Input,0,&cb,sizeof(cb)); if(s) return error=s;
-    s=AudioUnitInitialize(unit); if(s) return error=s;
-    initialized=true; return noErr;
+    s=AudioUnitSetProperty(unit,kAudioUnitProperty_MaximumFramesPerSlice,kAudioUnitScope_Global,0,&max,sizeof(max));if(s)return error=s;
+    for(UInt32 bus=0;bus<inputCount;++bus){
+        stage=bus?"auxiliary input callback":"main input callback";
+        AURenderCallbackStruct cb{input,this};
+        s=AudioUnitSetProperty(unit,kAudioUnitProperty_SetRenderCallback,kAudioUnitScope_Input,bus,&cb,sizeof(cb));if(s)return error=s;
+    }
+    stage="AudioUnitInitialize";
+    s=AudioUnitInitialize(unit);if(s)return error=s;
+    initialized=true;stage="AudioUnitRender";return noErr;
 }
 void AUEffect::process(float* l,float* r,UInt32 frames) {
     if(bypass.load() || error.load() || !initialized) { time+=frames; return; }

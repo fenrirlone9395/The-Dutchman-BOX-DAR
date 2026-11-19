@@ -3,9 +3,43 @@
 #include <cmath>
 #include <iostream>
 #include <numbers>
-int main() {
+int main(int argc,char** argv) {
     auto choices=scanAUEffects();
     std::cout<<"AUv2 effect candidates: "<<choices.size()<<std::endl;
+    if(argc==2 && std::string(argv[1])=="--flux"){
+        size_t tested=0;
+        for(auto& choice:choices){
+            if(choice.name.find("FLUX")==std::string::npos)continue;
+            if(choice.name.find("PureExpV3")==std::string::npos &&
+               choice.name.find("PureDCompV3")==std::string::npos &&
+               choice.name.find("PureDExpV3")==std::string::npos)continue;
+            AUEffect effect(choice);
+            for(double rate:{44100.,48000.,96000.}){
+                auto status=effect.prepare(rate);
+                if(status)std::cerr<<choice.name<<" failed "<<status<<" / "<<effect.errorDetail()<<std::endl;
+                assert(status==0);
+                UInt32 inputs=0,bytes=sizeof(inputs);
+                assert(!AudioUnitGetProperty(effect.handle(),kAudioUnitProperty_ElementCount,kAudioUnitScope_Input,0,&inputs,&bytes));
+                assert(inputs==2);
+                double energy=0;
+                for(int block=0;block<200;++block){
+                    float l[256],r[256];
+                    for(int i=0;i<256;++i){l[i]=.5f*std::sin(2*std::numbers::pi*440*(block*256+i)/rate);r[i]=l[i]*.75f;}
+                    effect.process(l,r,256);
+                    assert(!effect.error);
+                    for(int i=0;i<256;++i){assert(std::isfinite(l[i]) && std::isfinite(r[i]));energy+=double(l[i])*l[i]+double(r[i])*r[i];}
+                }
+                assert(energy>1e-6);
+                auto state=effect.copyState();assert(state);
+                assert(!effect.restore(state));CFRelease(state);
+                effect.bypass=true;float l=.25f,r=-.125f;effect.process(&l,&r,1);
+                assert(l==.25f && r==-.125f);effect.bypass=false;
+                std::cout<<choice.name<<" "<<rate<<" Hz: render, state and bypass passed"<<std::endl;
+            }
+            ++tested;
+        }
+        assert(tested==3);
+    }
     AUChoice c{{kAudioUnitType_Effect,kAudioUnitSubType_HighPassFilter,kAudioUnitManufacturer_Apple,0,0},"Apple AUHipass"};
     AUEffect effect(c);
     OSStatus result=effect.prepare(48000);
