@@ -68,7 +68,7 @@
     DARSpatialView* spatialView;
     NSButton* spatialSummary;
     NSButton* eqSummary;
-    double lastDeviceCheck,lastPresetCheck,applicationTapStartedAt;
+    double lastDeviceCheck,lastPresetCheck;
     NSString* applicationTapFailure;
     BOOL editWasRunning;
     BOOL busy,running;
@@ -373,8 +373,8 @@
     if(busy || (!selectedFilter && ![self usesProcessTap]) || !devices.selectedItem) return;
     applicationTapFailure=nil;
     auto targets=applicationAudioProcesses(selectedApplication);
-    if(selectedApplication && (!targets.resolved || targets.processes.empty())){
-        status.stringValue=selectedApplication.terminated?@"選択したアプリが終了しました。Application…から選び直してください。":@"選択したアプリの音声出力が見つかりません。再生を始めてからStartを押してください。";
+    if(selectedApplication && !targets.resolved){
+        status.stringValue=selectedApplication.terminated?@"選択したアプリが終了しました。Application…から選び直してください。":@"音声を出すアプリを特定できません。Application…から選び直してください。";
         applicationTapFailure=[NSString stringWithFormat:@"Application Tap: owner resolved=%d / %zu matched processes / %zu actively outputting at Start",targets.resolved,targets.matched,targets.active];
         return;
     }
@@ -398,7 +398,7 @@
             result=processTap->resume();
             if(!result)result=output->resume();
             if(result){processTap->stop();output->stop();status.stringValue=@"出力再開失敗";}
-            else {applicationTapStartedAt=NSProcessInfo.processInfo.systemUptime;running=YES;}
+            else running=YES;
         }
         [self controls];return;
     }
@@ -473,11 +473,6 @@
                 if(changed){[self stopWithMessage:@"アプリの音声プロセス更新に失敗したため停止しました。"];return;}
                 applicationTapTargets=std::move(current.processes);
             }
-        }
-        if(selectedApplication && !processTap->inputBlockCount() && now-applicationTapStartedAt>=3){
-            applicationTapFailure=[NSString stringWithFormat:@"Application Tap: no valid input within 3 s / callbacks=%llu / valid blocks=0",processTap->callbackCount()];
-            if(diagnosticsPanel.visible)diagnosticsText.string=[NSString stringWithFormat:@"%s\n%@",clockSummary.c_str(),applicationTapFailure];
-            [self stopWithMessage:@"Application Tapから入力が届かなかったため停止しました。"];return;
         }
         if(!clockConfigurationMatches(outputClockDescription)||([self usesProcessTap]&&!clockConfigurationMatches(sourceClockDescription))||
            ([self usesProcessTap]&&!clockConfigurationMatches(aggregateClockDescription))){[self stopWithMessage:@"Clock/rate configuration changed; Start to re-prepare adapter."];return;}

@@ -13,12 +13,11 @@ OSStatus ProcessTap::callback(AudioObjectID,const AudioTimeStamp*,const AudioBuf
     if(pushTapStereo(b,data))self.inputBlocks.fetch_add(1,std::memory_order_relaxed);
     return noErr;
 }
-OSStatus ProcessTap::start(bool beginIO) {return prepare(beginIO,{});}
+OSStatus ProcessTap::start(bool beginIO) {return prepare(beginIO,{},false);}
 OSStatus ProcessTap::startApplication(std::span<const AudioObjectID> targets,bool beginIO) {
-    if(targets.empty())return kAudio_ParamError;
-    return prepare(beginIO,targets);
+    return prepare(beginIO,targets,true);
 }
-OSStatus ProcessTap::prepare(bool beginIO,std::span<const AudioObjectID> targets) {
+OSStatus ProcessTap::prepare(bool beginIO,std::span<const AudioObjectID> targets,bool application) {
     stop();
     callbacks=0;inputBlocks=0;
     if(@available(macOS 14.2,*)) {
@@ -36,26 +35,26 @@ OSStatus ProcessTap::prepare(bool beginIO,std::span<const AudioObjectID> targets
         s=AudioObjectGetPropertyData(sourceDevice,&a,0,nullptr,&size,&uid);
         if(s || !uid){stop();return s?s:kAudio_ParamError;}
         CATapDescription* description=nil;
-        if(targets.empty()){
+        if(!application){
             description=[[CATapDescription alloc] initExcludingProcesses:@[@(own)] andDeviceUID:(__bridge NSString*)uid withStream:0];
         }else{
             NSMutableArray<NSNumber*>* selected=[NSMutableArray arrayWithCapacity:targets.size()];
             for(auto target:targets)if(target && target!=own)[selected addObject:@(target)];
-            if(selected.count)description=[[CATapDescription alloc] initWithProcesses:selected andDeviceUID:(__bridge NSString*)uid withStream:0];
+            description=[[CATapDescription alloc] initWithProcesses:selected andDeviceUID:(__bridge NSString*)uid withStream:0];
         }
         CFRelease(uid);
         description.mixdown=NO;
         if(!description){stop();return kAudio_ParamError;}
         description.privateTap=YES;
         description.muteBehavior=CATapMutedWhenTapped;
-        description.name=targets.empty()?@"The Dutchman System Audio":@"The Dutchman Application Audio";
+        description.name=application?@"The Dutchman Application Audio":@"The Dutchman System Audio";
         s=AudioHardwareCreateProcessTap(description,&tap); if(s) {stop();return s;}
-        if(!targets.empty())applicationDescription=CFBridgingRetain(description);
+        if(application)applicationDescription=CFBridgingRetain(description);
         AudioStreamBasicDescription format{}; size=sizeof(format); a.mSelector=kAudioTapPropertyFormat;
         s=AudioObjectGetPropertyData(tap,&a,0,nullptr,&size,&format);
         if(s || format.mFormatID!=kAudioFormatLinearPCM || !(format.mFormatFlags&kAudioFormatFlagIsFloat) || format.mBitsPerChannel!=32 || format.mChannelsPerFrame<2 || format.mSampleRate<8000) { stop();return s?s:kAudioUnitErr_FormatNotSupported; }
         bridge.captureRate=format.mSampleRate;
-        NSDictionary* config=@{@kAudioAggregateDeviceNameKey:@"The Dutchman Capture",@kAudioAggregateDeviceUIDKey:NSUUID.UUID.UUIDString,@kAudioAggregateDeviceIsPrivateKey:@YES,@kAudioAggregateDeviceTapAutoStartKey:@(targets.empty()),@kAudioAggregateDeviceTapListKey:@[@{@kAudioSubTapUIDKey:description.UUID.UUIDString,@kAudioSubTapDriftCompensationKey:@YES}]};
+        NSDictionary* config=@{@kAudioAggregateDeviceNameKey:@"The Dutchman Capture",@kAudioAggregateDeviceUIDKey:NSUUID.UUID.UUIDString,@kAudioAggregateDeviceIsPrivateKey:@YES,@kAudioAggregateDeviceTapAutoStartKey:@(!application),@kAudioAggregateDeviceTapListKey:@[@{@kAudioSubTapUIDKey:description.UUID.UUIDString,@kAudioSubTapDriftCompensationKey:@YES}]};
         s=AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)config,&device);
         if(!s) {
             Float64 rate=0; UInt32 bytes=sizeof(rate);

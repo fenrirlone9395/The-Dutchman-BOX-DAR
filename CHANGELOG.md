@@ -8,6 +8,7 @@
 - FLUX Pure Expander / Pure DCompressor / Pure DExpanderのAU版で、入力バス数の制限により初期化が失敗する問題を修正。
 - 対象3製品を44.1 / 48 / 96 kHzで検証。音声処理、状態保存・復元、Bypassの試験を通過。
 - AU初期化エラーに失敗した処理段階を表示。
+- アプリの音声再生前でもStart可能に変更。入力待ちによる自動停止を撤廃し、再生開始時に対象プロセスへ追従。
 
 ## 1.0.3 — Application TapのレベルとWebKit音声選択
 

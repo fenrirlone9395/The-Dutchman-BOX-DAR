@@ -8,7 +8,7 @@ class ProcessTap {
     AudioDeviceIOProcID io=nullptr;
     CFTypeRef applicationDescription=nullptr;
     std::atomic<uint64_t> callbacks{0},inputBlocks{0};
-    OSStatus prepare(bool beginIO,std::span<const AudioObjectID> targets);
+    OSStatus prepare(bool beginIO,std::span<const AudioObjectID> targets,bool application);
     static OSStatus callback(AudioObjectID,const AudioTimeStamp*,const AudioBufferList*,const AudioTimeStamp*,AudioBufferList*,const AudioTimeStamp*,void*);
 public:
     explicit ProcessTap(AudioBridge& b):bridge(b){}
