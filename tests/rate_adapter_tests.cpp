@@ -30,6 +30,15 @@ int main(){
         for(int k=0;k<100;++k){auto x=s.at(2048,k/100.,reader);assert(std::abs(x[0]-4)<2e-6&&std::abs(x[1]+4)<2e-6);}
         printf("Sinc %.0f->%.0f: unity/headroom/LR, %zu taps\n",rates[0],rates[1],s.taps());
     }
+    { SincResampler sinc;
+      auto reader=[](int64_t n){return std::array<float,2>{float(n%7),float(n%11)};};
+      sinc.prepare(44100,48000);auto first=sinc.at(2048,.37,reader);
+      forbidAllocation=true;sinc.prepare(88200,96000);forbidAllocation=false;
+      assert(sinc.at(2048,.37,reader)==first);
+      sinc.prepare(96000,48000);assert(sinc.at(2048,.37,reader)!=first);
+      sinc.prepare(44100,48000);assert(sinc.at(2048,.37,reader)==first);
+      puts("PASS: Sinc table reuse and rate changes preserve the response");
+    }
     for(bool timestamps:{false,true})for(double ppm:{-100.,-50.,-10.,10.,50.,100.}){
         DriftController c;double fill=2048,min=fill,max=fill,last=0;const double dt=256./48000; // Simulated one hour. No expensive FIR needed for control-only stability.
         for(int k=0;k<int(3600/dt);++k){double correction=c.update(fill,2048,48000,dt,timestamps&&k*dt>=10?ppm:0);assert(std::abs(correction-last)<=10*dt+1e-8);fill+=256*(ppm-correction)*1e-6;min=std::min(min,fill);max=std::max(max,fill);last=correction;}

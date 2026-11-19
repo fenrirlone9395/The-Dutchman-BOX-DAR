@@ -9,6 +9,35 @@ inline NSDictionary* read(NSURL* url){NSData* data=[NSData dataWithContentsOfURL
 inline bool validChoices(id choices,NSString* path){if(![path isKindOfClass:NSString.class]||![path isAbsolutePath]||![choices isKindOfClass:NSArray.class])return false;for(id c in choices){if(![c isKindOfClass:NSDictionary.class]||![c[@"path"] isEqual:path]||![c[@"name"] isKindOfClass:NSString.class]||[c[@"name"] length]>4096||![c[@"cid"] isKindOfClass:NSString.class]||[c[@"cid"] length]!=32||[c[@"cid"] rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF"] invertedSet]].location!=NSNotFound)return false;}return true;}
 inline void append(std::vector<VST3Choice>& out,id choices,NSString* path){if(!validChoices(choices,path))return;for(id c in choices)out.push_back({path.UTF8String,[c[@"cid"] UTF8String],[c[@"name"] UTF8String]});}
 inline std::vector<VST3Choice> cached(NSURL* url){std::vector<VST3Choice> out;NSDictionary* records=read(url);for(NSString* path in records){id entry=records[path];if([entry isKindOfClass:NSDictionary.class])append(out,entry[@"choices"],path);}std::sort(out.begin(),out.end(),[](auto& a,auto& b){return a.name<b.name;});return out;}
+inline NSString* canonicalBundle(NSString* path){
+    if(!path.isAbsolutePath || ![path.pathExtension.lowercaseString isEqual:@"vst3"])return nil;
+    NSString* canonical=path.stringByResolvingSymlinksInPath;
+    BOOL directory=NO;
+    return [NSFileManager.defaultManager fileExistsAtPath:canonical isDirectory:&directory]&&directory?canonical:nil;
+}
+inline NSString* installedBundle(NSString* path,NSArray<NSString*>* roots){
+    NSString* canonical=canonicalBundle(path);
+    if(!canonical)return nil;
+    for(NSString* root in roots){
+        NSString* prefix=[root.stringByResolvingSymlinksInPath stringByAppendingString:@"/"];
+        if([canonical hasPrefix:prefix])return canonical;
+    }
+    return nil;
+}
+inline const VST3Choice* resolve(const std::vector<VST3Choice>& choices,NSString* cid,NSString* savedPath){
+    const VST3Choice* match=nullptr;
+    bool ambiguous=false;
+    for(auto& choice:choices){
+        NSString* identity=[NSString stringWithUTF8String:choice.cid.c_str()];
+        if([identity caseInsensitiveCompare:cid]!=NSOrderedSame)continue;
+        NSString* path=[NSString stringWithUTF8String:choice.path.c_str()];
+        if(![canonicalBundle(path) isEqualToString:path])continue;
+        if([path isEqualToString:savedPath])return &choice;
+        if(match && match->path!=choice.path)ambiguous=true;
+        match=&choice;
+    }
+    return ambiguous?nullptr:match;
+}
 // Metadata of every bundle entry, including nested binaries/resources and symlink targets.
 // Off audio/UI threads; no hashing of large binary contents.
 inline NSString* fingerprint(NSString* path){NSMutableArray* manifest=[NSMutableArray new];NSMutableArray* paths=[NSMutableArray arrayWithObject:@""];NSDirectoryEnumerator* files=[NSFileManager.defaultManager enumeratorAtPath:path];for(NSString* relative in files)[paths addObject:relative];[paths sortUsingSelector:@selector(compare:)];for(NSString* relative in paths){NSString* file=[path stringByAppendingPathComponent:relative];NSDictionary* a=[NSFileManager.defaultManager attributesOfItemAtPath:file error:nil];if(!a)return nil;NSString* target=[NSFileManager.defaultManager destinationOfSymbolicLinkAtPath:file error:nil]?:@"";[manifest addObject:@[relative,a[NSFileSize]?:@0,@([a[NSFileModificationDate] timeIntervalSince1970]),a[NSFileType]?:@"",target]];}NSData* data=[NSPropertyListSerialization dataWithPropertyList:manifest format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(data.bytes,(CC_LONG)data.length,digest);NSMutableString* hash=[NSMutableString new];for(auto b:digest)[hash appendFormat:@"%02x",b];return hash;}

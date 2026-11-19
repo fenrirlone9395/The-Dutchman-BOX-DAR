@@ -40,10 +40,18 @@ int main(){@autoreleasepool{
     assert(((DARGainKnob*)[app valueForKey:@"savedOutputKnob"]).floatValue==-18.25f);
     assert(((NSButton*)[app valueForKey:@"savedEQBypass"]).state==NSControlStateValueOn);
     assert(((NSButton*)[app valueForKey:@"savedLimiterBypass"]).state==NSControlStateValueOn);
-    assert(((NSButton*)[app valueForKey:@"savedSpatialEnabled"]).state==NSControlStateValueOn);
+    assert(((NSSegmentedControl*)[app valueForKey:@"spatialMode"]).selectedSegment==1);
     assert([((NSButton*)[app valueForKey:@"spatialSummary"]).title containsString:@"CROSSFEED"]);
     assert([((NSButton*)[app valueForKey:@"eqSummary"]).title containsString:@"BYPASS"]);
     NSDictionary* saved=[ui rackDocument];assert([saved[@"version"] isEqual:@4]&&[saved[@"settings"][@"inputDB"] floatValue]==5.5f&&[saved[@"settings"][@"spatial"][@"angle"] floatValue]==45);
     NSLog(@"PASS: full settings restore updates knobs, EQ/limiter/spatial toggles and summaries; save snapshots restored values");
+    settings[@"spatial"]=@{@"enabled":@YES,@"hrtf":@YES,@"angle":@53,@"distance":@2,@"amount":@.7};
+    assert(([ui restoreRackDocument:@{@"version":@4,@"slots":@[],@"settings":settings}]));
+    assert(((NSSegmentedControl*)[app valueForKey:@"spatialMode"]).selectedSegment==2);
+    assert([((NSButton*)[app valueForKey:@"spatialSummary"]).title containsString:@"HRTF"]);
+    saved=[ui rackDocument];assert([saved[@"settings"][@"spatial"][@"hrtf"] boolValue]);
+    assert([saved[@"settings"][@"spatial"][@"angle"] floatValue]==53);
+    assert([saved[@"settings"][@"spatial"][@"hrtfAngle"] floatValue]==53);
+    assert([saved[@"settings"][@"spatial"][@"crossfeedAngle"] floatValue]==30);
     [ui closeEditors];
 }}

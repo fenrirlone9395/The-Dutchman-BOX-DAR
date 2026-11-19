@@ -6,17 +6,17 @@
 struct RackSettings {
     float inputDB=0,masterDB=0;
     std::array<float,15> bands{};
-    bool eqBypass=false,limiterBypass=false,spatialEnabled=false;
-    float angle=30,distance=1.5f,amount=.5f;
+    bool eqBypass=false,limiterBypass=false,spatialEnabled=false,spatialHRTF=false;
+    float angle=30,hrtfAngle=SpatialParameters::defaultHRTFAngle,distance=1.5f,amount=.5f;
     static RackSettings capture(const DSPParameters& p,const SpatialParameters& s) {
         RackSettings v;v.inputDB=p.inputDB;v.masterDB=p.masterDB;
         for(size_t i=0;i<v.bands.size();++i)v.bands[i]=p.bands[i];
         v.eqBypass=p.eqBypass;v.limiterBypass=p.limiterBypass;
-        v.spatialEnabled=s.enabled;v.angle=s.angle;v.distance=s.distance;v.amount=s.amount;return v;
+        v.spatialEnabled=s.enabled;v.spatialHRTF=s.hrtf;v.angle=s.angle;v.hrtfAngle=s.hrtfAngle;v.distance=s.distance;v.amount=s.amount;return v;
     }
     NSDictionary* encode() const {
         NSMutableArray* gains=[NSMutableArray new];for(float gain:bands)[gains addObject:@(gain)];
-        return @{@"inputDB":@(inputDB),@"masterDB":@(masterDB),@"geq":@{@"bands":gains,@"bypass":@(eqBypass)},@"limiterBypass":@(limiterBypass),@"spatial":@{@"enabled":@(spatialEnabled),@"angle":@(angle),@"distance":@(distance),@"amount":@(amount)}};
+        return @{@"inputDB":@(inputDB),@"masterDB":@(masterDB),@"geq":@{@"bands":gains,@"bypass":@(eqBypass)},@"limiterBypass":@(limiterBypass),@"spatial":@{@"enabled":@(spatialEnabled),@"hrtf":@(spatialHRTF),@"angle":@(spatialHRTF?hrtfAngle:angle),@"crossfeedAngle":@(angle),@"hrtfAngle":@(hrtfAngle),@"distance":@(distance),@"amount":@(amount)}};
     }
     static bool number(id value,double lo,double hi,float& result) {
         if(![value isKindOfClass:NSNumber.class])return false;double n=[value doubleValue];
@@ -32,11 +32,16 @@ struct RackSettings {
         RackSettings v;
         if(!number(root[@"inputDB"],-24,12,v.inputDB)||!number(root[@"masterDB"],-60,6,v.masterDB)||!boolean(eq[@"bypass"],v.eqBypass)||!boolean(root[@"limiterBypass"],v.limiterBypass)||!boolean(s[@"enabled"],v.spatialEnabled)||!number(s[@"angle"],10,75,v.angle)||!number(s[@"distance"],.4f,3,v.distance)||!number(s[@"amount"],0,1,v.amount))return false;
         for(size_t i=0;i<15;++i)if(!number(gains[i],-12,12,v.bands[i]))return false;
+        if(s[@"hrtf"]&&!boolean(s[@"hrtf"],v.spatialHRTF))return false;
+        // Older documents carried only the angle of the selected mode.
+        if(v.spatialHRTF){v.hrtfAngle=v.angle;v.angle=30;}
+        if(s[@"crossfeedAngle"]&&!number(s[@"crossfeedAngle"],10,75,v.angle))return false;
+        if(s[@"hrtfAngle"]&&!number(s[@"hrtfAngle"],10,75,v.hrtfAngle))return false;
         result=v;return true;
     }
     void apply(DSPParameters& p,SpatialParameters& s) const {
         p.inputDB=inputDB;p.masterDB=masterDB;for(size_t i=0;i<15;++i)p.bands[i]=bands[i];
         p.eqBypass=eqBypass;p.limiterBypass=limiterBypass;
-        s.angle=angle;s.distance=distance;s.amount=amount;s.enabled=spatialEnabled;
+        s.angle=angle;s.hrtfAngle=hrtfAngle;s.distance=distance;s.amount=amount;s.hrtf=spatialHRTF;s.enabled=spatialEnabled;
     }
 };

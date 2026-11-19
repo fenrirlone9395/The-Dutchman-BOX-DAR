@@ -10,6 +10,14 @@ int main(){@autoreleasepool{
  VST3Catalog::scan(@[root],cache,false,probe,report);assert(calls==1);
  [@"changed binary" writeToFile:[a stringByAppendingPathComponent:@"Contents/MacOS/Effect"] atomically:YES encoding:NSUTF8StringEncoding error:nil];VST3Catalog::scan(@[root],cache,false,probe,report);assert(calls==2);
  NSString* b=bundle(@"B.vst3");choices=VST3Catalog::scan(@[root],cache,false,probe,report);assert(calls==3&&choices.size()==2);
+ NSString* first=a.stringByResolvingSymlinksInPath;
+ NSString* second=b.stringByResolvingSymlinksInPath;
+ choices[0].path=first.UTF8String;choices[1].path=second.UTF8String;
+ NSString* cid=@"424f5854455354310102030405060708";
+ assert(VST3Catalog::resolve(choices,cid,first)==&choices[0]);
+ assert(!VST3Catalog::resolve(choices,cid,@"OldLocation/Effect.vst3"));
+ assert(!VST3Catalog::installedBundle(a,@[[root stringByAppendingPathComponent:@"AnotherRoot"]]));
+ assert([VST3Catalog::installedBundle(a,@[root]) isEqualToString:first]);
  [NSFileManager.defaultManager removeItemAtPath:b error:nil];choices=VST3Catalog::scan(@[root],cache,false,probe,report);assert(calls==3&&choices.size()==1);
  bundle(@"Bad.vst3");VST3Catalog::scan(@[root],cache,false,probe,report);assert(calls==4);VST3Catalog::scan(@[root],cache,false,probe,report);assert(calls==4);
  VST3Catalog::scan(@[root],cache,true,probe,report);assert(calls==6);

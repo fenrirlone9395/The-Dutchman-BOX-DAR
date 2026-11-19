@@ -42,7 +42,9 @@
     double clockSecondsPerTick;
     AURackUI* auUI;
     DARGainKnob *savedInputKnob,*savedOutputKnob;
-    NSButton *savedEQBypass,*savedLimiterBypass,*savedSpatialEnabled;
+    NSButton *savedEQBypass,*savedLimiterBypass;
+    NSSegmentedControl* spatialMode;
+    NSTextField* spatialStatus;
     std::unique_ptr<Output> output;
     dispatch_queue_t captureQueue;
     SCStream* stream;
@@ -85,7 +87,7 @@
     auUI=[[AURackUI alloc] initWithRack:&auRack];
     output=std::make_unique<Output>(bridge);
     __weak RackApp* weakSelf=self;
-    auUI.beforeEdit=^{ [weakSelf beginRackEdit]; };
+    auUI.beforeEdit=^BOOL{ return [weakSelf beginRackEdit]; };
     auUI.afterEdit=^{ [weakSelf endRackEdit]; };
     [auUI setDSPParameters:&bridge.parameters spatialParameters:&bridge.spatialParameters];
     auUI.settingsDidLoad=^{ [weakSelf refreshSavedControls]; };
@@ -133,9 +135,11 @@
     spatialPanel=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,760,520) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];spatialPanel.releasedWhenClosed=NO;spatialPanel.title=@"The Dutchman — Spatial Listening";spatialPanel.level=NSFloatingWindowLevel;spatialPanel.hidesOnDeactivate=YES;spatialPanel.backgroundColor=DARDeep();spatialPanel.appearance=window.appearance;
     DARDocument* spatialCanvas=[[DARDocument alloc] initWithFrame:spatialPanel.contentView.bounds];spatialPanel.contentView=spatialCanvas;
     spatialView=[[DARSpatialView alloc] initWithParameters:&bridge.spatialParameters];spatialView.frame=NSMakeRect(0,40,760,480);[spatialCanvas addSubview:spatialView];
-    NSButton* crossfeed=[NSButton checkboxWithTitle:@"Crossfeed 有効" target:self action:@selector(enableSpatial:)];crossfeed.frame=NSMakeRect(18,8,180,24);[spatialCanvas addSubview:crossfeed];
-    NSButton* resetField=[self button:@"Reset Field" action:@selector(resetSpatial:)];resetField.frame=NSMakeRect(206,6,124,28);[spatialCanvas addSubview:resetField];
-    savedInputKnob=inKnob;savedOutputKnob=outKnob;savedEQBypass=eqBypass;savedLimiterBypass=limiter;savedSpatialEnabled=crossfeed;
+    spatialMode=[NSSegmentedControl segmentedControlWithLabels:@[@"OFF",@"Crossfeed",@"HRTF"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(selectSpatialMode:)];
+    spatialMode.selectedSegment=0;spatialMode.frame=NSMakeRect(18,6,240,28);[spatialCanvas addSubview:spatialMode];
+    NSButton* resetField=[self button:@"Reset Field" action:@selector(resetSpatial:)];resetField.frame=NSMakeRect(270,6,124,28);[spatialCanvas addSubview:resetField];
+    spatialStatus=[NSTextField labelWithString:@""];spatialStatus.frame=NSMakeRect(405,10,345,20);[spatialCanvas addSubview:spatialStatus];
+    savedInputKnob=inKnob;savedOutputKnob=outKnob;savedEQBypass=eqBypass;savedLimiterBypass=limiter;
     meters=[NSTextField labelWithString:@"Stopped"];meters.font=[NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];meters.textColor=DARColor(0x9CAEC5);add(meters);
     status=[NSTextField labelWithString:@"停止中"];status.font=[NSFont systemFontOfSize:10];status.textColor=DARAmber();add(status);
     __weak DARDocument* weakCanvas=canvas;
@@ -201,12 +205,23 @@
     savedInputKnob.floatValue=bridge.parameters.inputDB;savedOutputKnob.floatValue=bridge.parameters.masterDB;
     savedEQBypass.state=bridge.parameters.eqBypass?NSControlStateValueOn:NSControlStateValueOff;
     savedLimiterBypass.state=bridge.parameters.limiterBypass?NSControlStateValueOn:NSControlStateValueOff;
-    savedSpatialEnabled.state=bridge.spatialParameters.enabled?NSControlStateValueOn:NSControlStateValueOff;
+    spatialMode.selectedSegment=bridge.spatialParameters.enabled?(bridge.spatialParameters.hrtf?2:1):0;
     geq.needsDisplay=YES;eqMini.needsDisplay=YES;spatialView.needsDisplay=YES;
     eqSummary.title=bridge.parameters.eqBypass?@"MASTER EQ · BYPASS  ▸":@"MASTER EQ  ▸";
-    spatialSummary.title=bridge.spatialParameters.enabled?@"SPATIAL · CROSSFEED  ▸":@"SPATIAL · OFF  ▸";
+    [self updateSpatialStatus];
 }
-- (void)enableSpatial:(NSButton*)sender { bridge.spatialParameters.enabled=sender.state==NSControlStateValueOn;spatialView.needsDisplay=YES;spatialSummary.title=bridge.spatialParameters.enabled?@"SPATIAL · CROSSFEED  ▸":@"SPATIAL · OFF  ▸"; }
+- (void)updateSpatialStatus {
+    auto& p=bridge.spatialParameters;
+    const int error=bridge.hrtfError;
+    spatialSummary.title=!p.enabled?@"SPATIAL · OFF  ▸":!p.hrtf?@"SPATIAL · CROSSFEED  ▸":error?@"SPATIAL · HRTF ERROR  ▸":@"SPATIAL · HRTF  ▸";
+    spatialStatus.stringValue=p.enabled&&p.hrtf&&error?[NSString stringWithFormat:@"HRTFを利用できません（%d）。原音を出力中。",error]:@"";
+}
+- (void)selectSpatialMode:(NSSegmentedControl*)sender {
+    bridge.spatialParameters.hrtf=sender.selectedSegment==2;
+    bridge.spatialParameters.enabled=sender.selectedSegment>0;
+    spatialView.needsDisplay=YES;
+    [self updateSpatialStatus];
+}
 - (void)resetSpatial:(id)sender { [spatialView resetField]; }
 - (void)showEQ:(id)sender { [eqPanel center];[eqPanel makeKeyAndOrderFront:nil]; }
 - (void)gainKnob:(DARGainKnob*)knob { if(knob.tag==0)bridge.parameters.inputDB=knob.floatValue;else bridge.parameters.masterDB=knob.floatValue; }
@@ -218,7 +233,11 @@
     }
 }
 - (void)flatEQ:(id)sender { [geq flatten]; }
-- (void)beginRackEdit { editWasRunning=running; if(editWasRunning) output->pause(); }
+- (BOOL)beginRackEdit {
+    if(running && output->pause()!=noErr)return NO;
+    editWasRunning=running;
+    return YES;
+}
 - (void)endRackEdit {
     if(editWasRunning) { OSStatus error=output->resume(); if(error) [self stopWithMessage:@"出力の再開に失敗しました。"]; }
     editWasRunning=NO;
@@ -348,7 +367,7 @@
     [inputView updateLeft:il right:ir time:now]; [outputView updateLeft:ol right:orr time:now];
     reductionLabel.stringValue=[NSString stringWithFormat:@"−1.0 dBFS / GR %.1f dB%@",bridge.gainReduction.exchange(0),bridge.parameters.limiterBypass?@"  (BYPASS)":@""];
     meters.stringValue=[NSString stringWithFormat:@"Queue %.1f ms  |  Underrun %llu / Overrun %llu / Invalid %llu  |  Output %.0f Hz · %u frames",bridge.queued()*1000/bridge.captureRate.load(),bridge.underruns.load(),bridge.overruns.load(),bridge.invalid.load(),output->rate,output->bufferFrames];
-    spatialSummary.title=bridge.spatialParameters.enabled?@"SPATIAL · CROSSFEED  ▸":@"SPATIAL · OFF  ▸";
+    [self updateSpatialStatus];
     eqMini.sampleRate=geq.sampleRate;eqMini.needsDisplay=YES;
     eqSummary.title=bridge.parameters.eqBypass?@"MASTER EQ · BYPASS  ▸":@"MASTER EQ  ▸";
     if(running&&!busy) [self controls];

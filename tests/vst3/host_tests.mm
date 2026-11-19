@@ -28,6 +28,24 @@ int main(int argc,char** argv){if(argc==3&&!strcmp(argv[1],"--vst3-probe"))retur
         NSSlider* control=slider(editor.contentView);assert(control);control.doubleValue=0.25;[control sendAction:control.action to:control.target];
         memcpy(l,original,sizeof(l));effect.process(l,r,512);for(int i=0;i<512;++i)assert(l[i]==original[i]*0.5f);
         CFPropertyListRef state=effect.copyState();assert(state);VST3Effect restored(choice);assert(!restored.prepare(44100));assert(!restored.restore(state));CFRelease(state);memcpy(l,original,sizeof(l));restored.process(l,r,512);for(int i=0;i<512;++i)assert(l[i]==original[i]*0.5f);
+        if(iteration==0){
+            auto edit=[&](double value){control.doubleValue=value;[control sendAction:control.action to:control.target];};
+            edit(.375);
+            CFPropertyListRef pending=effect.copyState();
+            assert(pending && !restored.restore(pending));CFRelease(pending);
+            memcpy(l,original,sizeof(l));restored.process(l,r,512);
+            for(int i=0;i<512;++i)assert(l[i]==original[i]*.75f);
+            effect.bypass=true;
+            for(int i=0;i<4096;++i){edit(i%2?.125:.375);effect.process(l,r,512);}
+            assert(!effect.error);
+            CFPropertyListRef bypassed=effect.copyState();
+            assert(bypassed && !restored.restore(bypassed));CFRelease(bypassed);
+            memcpy(l,original,sizeof(l));restored.process(l,r,512);
+            for(int i=0;i<512;++i)assert(l[i]==original[i]*.25f);
+            effect.bypass=false;
+            memcpy(l,original,sizeof(l));effect.process(l,r,512);
+            for(int i=0;i<512;++i)assert(l[i]==original[i]*.25f);
+        }
         effect.bypass=true;memcpy(l,original,sizeof(l));effect.process(l,r,512);assert(!memcmp(l,original,sizeof(l)));effect.closeEditor();assert(effect.showEditor());effect.closeEditor();
         assert(effect.prepare(96000)==0);
         effect.bypass=false;
@@ -41,5 +59,5 @@ int main(int argc,char** argv){if(argc==3&&!strcmp(argv[1],"--vst3-probe"))retur
     }
     unsetenv("BOX_FIXTURE_SIDECHAIN");
     if(argc>=2){VST3Choice real{argv[1],argc>=3?argv[2]:"F2AEE70D00DE4F4E534441613159456F","Manufacturer test"};VST3Effect effect(real);auto status=effect.prepare(48000);printf("Manufacturer prepare=%d / %s\n",int(status),effect.errorDetail());assert(!status);float l[512]{},r[512]{};double energy=0;for(int block=0;block<100;++block){for(int i=0;i<512;++i){l[i]=0.1f*std::sin((block*512+i)*2*3.141592653589793*440/48000);r[i]=l[i];}effect.process(l,r,512);for(float v:l)energy+=double(v)*v;}assert(!effect.error);printf("Manufacturer processed sine RMS %.8f\n",std::sqrt(energy/(512*100)));assert(energy>1e-6);assert(effect.showEditor());[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];effect.closeEditor();}
-    puts("PASS: VST3 stereo Float32 + inactive auxiliary bus layout/pointers, >0 dBFS preserved, native GUI edits change audio, state restore, bypass bit exact, 8 close/reopen/removal cycles, rate re-prepare");
+    puts("PASS: VST3 stereo Float32 + inactive auxiliary bus layout/pointers, >0 dBFS preserved, native GUI edits change audio, applied/pending state restore, 4096 bypassed edits, bypass bit exact, 8 close/reopen/removal cycles, rate re-prepare");
 }}

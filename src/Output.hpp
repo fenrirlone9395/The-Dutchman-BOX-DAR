@@ -1,5 +1,6 @@
 #pragma once
 #include "AudioBridge.hpp"
+#include "HRTFRenderer.hpp"
 #include <AudioUnit/AudioUnit.h>
 #include <CoreAudio/CoreAudio.h>
 #include <string>
@@ -8,6 +9,7 @@ struct OutputDevice { AudioDeviceID id; std::string name; };
 std::vector<OutputDevice> outputDevices();
 class Output {
     AudioUnit unit=nullptr;
+    HRTFRenderer hrtf;
     AudioBridge& bridge;
     static OSStatus callback(void*,AudioUnitRenderActionFlags*,const AudioTimeStamp*,UInt32,UInt32,AudioBufferList*);
 public:
@@ -17,6 +19,6 @@ public:
     ~Output(){ stop(); }
     OSStatus start(AudioDeviceID);
     void stop();
-    void pause();
+    OSStatus pause();
     OSStatus resume();
 };

@@ -18,10 +18,10 @@ class InternalDSP {
     float input=1,master=1,inputTarget=1,masterTarget=1;
     float wet=1,wetTarget=1;
     float limitGain=1,limitWet=1,limitTarget=1;
-    float smooth=0,release=0;
+    float smooth=0,release=0,minimumGain=1;
 public:
     static constexpr float ceiling=0.891250938f; // -1 dBFS sample peak; not a true-peak limiter.
-    float reduction=0;
+    float reductionDB()const{return std::max(0.f,-20*std::log10(std::max(minimumGain,1e-12f)));}
     void reset() { *this=InternalDSP{}; }
     void begin(const DSPParameters& p,double rate,size_t frames) {
         smooth=1-std::exp(-1.0/(rate*0.010));
@@ -39,7 +39,7 @@ public:
             f.b0=(1+alpha*A)/a0; f.b1=-2*std::cos(w)/a0; f.b2=(1-alpha*A)/a0;
             f.a1=f.b1; f.a2=(1-alpha/A)/a0;
         }
-        reduction=0;
+        minimumGain=1;
     }
     void processInput(float& l,float& r) {
         input+=(inputTarget-input)*smooth;
@@ -64,7 +64,7 @@ public:
         float required=peak>ceiling?ceiling/peak:1;
         limitGain=required<limitGain?required:release*limitGain+(1-release)*required;
         float g=1+(limitGain-1)*limitWet;
-        reduction=std::max(reduction,-20*std::log10(std::max(g,1e-12f)));
+        minimumGain=std::min(minimumGain,g);
         l=x[0]*g; r=x[1]*g;
     }
     // Convenience for standalone DSP tests; the engine inserts AU Rack between these stages.

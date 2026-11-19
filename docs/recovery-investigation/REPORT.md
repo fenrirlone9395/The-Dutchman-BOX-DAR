@@ -72,12 +72,12 @@ bash scripts/test-recovery-diagnostics.sh
 bash scripts/test-recovery-parity.sh
 ```
 
-The parity script removes its temporary raw comparison samples on exit; it does not create WAVs. Source/diagnostic fixtures and textual results are small. The coefficient-quality comparison harness is not run by these tests.
+The parity script compares steady and recovery waveforms against 0.0.29 with deterministic input delivery. It removes the temporary raw samples on exit. The separate diagnostics test exercises input arriving after the output block starts and a true source pause.
 
-## Candidate remediation, deliberately not implemented
+## Recovery follow-up
 
 If the queue-transient candidate is confirmed, separate oscillator drift estimation from deliberate pause/burst transients, evaluate rate-limit-aware anti-windup and recovery-state handling. Review any proposed change and re-run waveform/ratio tests before adoption. Do not widen the filter band, reduce tap count or change the DSP to mask buffer starvation.
 
-If frozen snapshot is confirmed, evaluate one bounded fresh producer position read at the shortage boundary with the existing acquire/release memory ordering. If Capture gaps or hardware sample-time jumps dominate, investigate device/OS scheduling rather than retuning SRC blindly.
+The current adapter rechecks the producer position once before declaring a lookahead shortage, using the existing acquire/release ordering. A synthetic test confirms that available input prevents a false recovery. Capture gaps and hardware sample-time jumps remain separately observable.
 
 Apple IOProc timestamp semantics: https://developer.apple.com/documentation/coreaudio/audiodeviceioproc . The host callback entry, input acquisition time and output presentation time are distinct.

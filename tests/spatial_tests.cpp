@@ -22,6 +22,19 @@ int main(){
         for(int i=0;i<int(rate);++i){float l=.3,r=.3;dsp.process(l,r);if(i>rate*.9){assert(std::abs(l-.3)<1e-4&&std::abs(r-.3)<1e-4);}}
         for(int block=0;block<1000;++block){p.angle=block%2?10:75;p.distance=block%2?.4:3;p.amount=block%3?1:0;p.enabled=block%4!=0;dsp.begin(p,rate);for(int i=0;i<128;++i){float l=.3,r=-.3;dsp.process(l,r);assert(std::isfinite(l)&&std::isfinite(r)&&std::abs(l)<=.3001&&std::abs(r)<=.3001);}}
     }
+    // HRTF disconnects Crossfeed output while its history keeps advancing.
+    {SpatialParameters p;CrossfeedDSP full,historyOnly;
+     for(int block=0;block<60;++block){
+        p.enabled=block<10 || block>=40;p.angle=block%2?20:70;
+        full.begin(p,48000);historyOnly.begin(p,48000);
+        for(int i=0;i<256;++i){
+            float l=.3f*std::sin(float(block*256+i)*.01f),r=-.12f,c=l,d=r;
+            full.process(l,r);
+            if(block>=10 && block<40)historyOnly.track(c,d);
+            else {historyOnly.process(c,d);assert(l==c && r==d);}
+        }
+     }
+    }
     struct RightOnlyRack : BlockProcessor {int prepare(double)override{return 0;}void process(float* l,float* r,size_t n)override{for(size_t i=0;i<n;++i){l[i]=0;r[i]=.2f;}}} rack;
     AudioBridge bridge;bridge.rack=&rack;bridge.muted=false;bridge.spatialParameters.enabled=true;
     std::array<float,4096> silence{};std::array<float,256> left{},right{};bridge.push(silence.data(),silence.data(),2048,1);

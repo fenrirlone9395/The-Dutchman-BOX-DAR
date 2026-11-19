@@ -31,7 +31,7 @@ int main() { @autoreleasepool {
     [embedded.widthAnchor constraintEqualToConstant:900].active=YES;
     [host.contentView layoutSubtreeIfNeeded]; assert(embedded.superview==host.contentView);
     __block int before=0,after=0;
-    ui.beforeEdit=^{++before;}; ui.afterEdit=^{++after;};
+    ui.beforeEdit=^BOOL{++before;return YES;}; ui.afterEdit=^{++after;};
     assert(AudioUnitSetParameter(rack.slots[0]->handle(),kHipassParam_CutoffFrequency,kAudioUnitScope_Global,0,2000,0)==0);
     CFPropertyListRef raw=rack.slots[0]->copyState();assert(raw);
     id state=CFBridgingRelease(raw);

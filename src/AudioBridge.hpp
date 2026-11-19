@@ -34,6 +34,8 @@ public:
     std::atomic<bool> muted{true};
     DSPParameters parameters;
     SpatialParameters spatialParameters;
+    SpatialRenderer* hrtfRenderer=nullptr; // Owned by Output; set while stopped.
+    std::atomic<int> hrtfError{0};
     std::atomic<double> captureRate{48000};
     BlockProcessor* rack=nullptr; // Lifetime owned by app, replaced only with output stopped.
     StereoMeter inputMeter, outputMeter;
@@ -69,13 +71,12 @@ public:
         StereoMeter::maximum(inputPeak,peak); inputMeter.publish(pl,pr);
         write.store(w+frames,std::memory_order_release);
     }
-    // Bounded, allocation-free linear SRC, with gentle occupancy-based clock correction.
-    // Replace with band-limited SRC before production listening-quality release.
     void render(float* l,float* r,size_t frames,double outputRate) {
         ++outputBlocks;uint64_t renderBegan=mach_absolute_time();
         std::array<RecoveryEvent,3> pendingEvents{};size_t pendingCount=0;
         auto rd=read.load(std::memory_order_relaxed);
-        auto w=write.load(std::memory_order_acquire);
+        const auto w=write.load(std::memory_order_acquire);
+        auto availableWrite=w;
         bool legacy=rateAdapter.mode()==RateMode::Legacy;
         constexpr uint64_t target=2048;
         if(legacy && w-rd > 8192) { rd=w-target; phase=0; primed=false; ++overruns; }
@@ -85,7 +86,10 @@ public:
         if(legacy){auto& t=rateAdapter.telemetry;t.ratio=step;t.ppm=correction*1e6;t.fill=double(w-rd);t.minFill=std::min(t.minFill.load(std::memory_order_relaxed),double(w-rd));t.maxFill=std::max(t.maxFill.load(std::memory_order_relaxed),double(w-rd));}
         float peak=0,pl=0,pr=0; bool starved=false;
         dsp.begin(parameters,outputRate,frames);
-        spatial.begin(spatialParameters,outputRate);
+        const bool wantsHRTF=spatialParameters.enabled && spatialParameters.hrtf;
+        const bool usingHRTF=wantsHRTF && hrtfRenderer && !hrtfError && !spatial.blending();
+        const bool hrtfTransition=hrtfRenderer && hrtfRenderer->blending();
+        spatial.begin(spatialParameters,outputRate,spatialParameters.enabled && !wantsHRTF && !hrtfTransition);
         auto before=rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed);
         bool wasPrimed=rateAdapter.isPrimed();
         auto observeRecovery=[&](RecoveryReason reason,size_t frame){
@@ -105,7 +109,7 @@ public:
         for(size_t i=0;i<frames;++i) {
             float a=0,b=0;
             if(!legacy) {
-                bool available=rateAdapter.next(w,i,frames,reader,a,b);
+                bool available=rateAdapter.next(availableWrite,i,frames,reader,[&]{return write.load(std::memory_order_acquire);},a,b);
                 if(!available){++zeroInputs;if(!observedShortage){if(rateAdapter.telemetry.recoveries.load(std::memory_order_relaxed)!=before)observeRecovery(RecoveryReason::InputLookaheadShortage,i);observedShortage=true;}}
             }
             else if(primed && w-rd>=2 && double(w-rd)>phase+step+1) {
@@ -117,9 +121,13 @@ public:
             l[i]=a; r[i]=b;
         }
         if(rack) rack->process(l,r,frames);
+        if(usingHRTF || hrtfTransition){
+            if(int status=hrtfRenderer->process(l,r,frames,usingHRTF,spatialParameters.hrtfAngle))hrtfError=status;
+        }
         for(size_t i=0;i<frames;++i) {
             float a=l[i],b=r[i];
-            spatial.process(a,b);
+            if(usingHRTF || hrtfTransition)spatial.track(a,b);
+            else spatial.process(a,b);
             dsp.processMaster(a,b);
             if(!std::isfinite(a)||!std::isfinite(b)) { a=b=0; dsp.reset(); muted=true; ++invalid; }
             if(muted.load(std::memory_order_relaxed)) gain=0;
@@ -135,7 +143,7 @@ public:
         }
         if(starved) ++underruns;
         StereoMeter::maximum(outputPeak,peak); outputMeter.publish(pl,pr);
-        StereoMeter::maximum(gainReduction,dsp.reduction);
+        StereoMeter::maximum(gainReduction,dsp.reductionDB());
         read.store(rd,std::memory_order_release);
         if(pendingCount){uint64_t elapsed=uint64_t((mach_absolute_time()-renderBegan)*callbackTiming.nanosPerTick);for(size_t i=0;i<pendingCount;++i){pendingEvents[i].currentRenderNS=elapsed;recoveryEvents.push(pendingEvents[i]);}}
     }

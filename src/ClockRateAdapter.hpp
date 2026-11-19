@@ -84,9 +84,17 @@ public:
         auto state=controller.diagnosticState();telemetry.filteredFill=state[0];telemetry.proportionalPPM=state[1];telemetry.integralPPM=state[2];telemetry.desiredPPM=state[3];telemetry.feedForwardPPM=feedForwardPPM;
     }
     template<class Reader> bool next(uint64_t written,size_t frame,size_t frames,const Reader& reader,float& l,float& r){
+        return next(written,frame,frames,reader,[&]{return written;},l,r);
+    }
+    template<class Reader,class Refresh> bool next(uint64_t& written,size_t frame,size_t frames,const Reader& reader,const Refresh& refresh,float& l,float& r){
         l=r=0;if(!primed)return false;
-        double step=ratioStart+(ratioEnd-ratioStart)*(frame+1)/frames;
-        if(written-cursor<(selected==RateMode::Direct?1:lookahead()+size_t(std::ceil(step))+2)){primed=false;++telemetry.recoveries;return false;}
+        double step=stepAt(frame,frames);
+        const auto required=requiredInput(step);
+        if(written-cursor<required){
+            // Capture can publish more frames while output is working on this block.
+            written=refresh();
+            if(written-cursor<required){primed=false;++telemetry.recoveries;return false;}
+        }
         if(selected==RateMode::Direct){auto s=reader(int64_t(cursor));l=s[0];r=s[1];++cursor;return true;}
         auto s=sinc.at(cursor,phase,reader);l=s[0];r=s[1];
         phase+=step;auto used=uint64_t(phase);cursor+=used;phase-=used;return true;

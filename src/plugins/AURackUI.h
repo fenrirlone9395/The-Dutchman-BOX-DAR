@@ -6,7 +6,7 @@
 - (void)show;
 - (void)rebuild;
 - (NSView*)embeddedView;
-@property(copy) void (^beforeEdit)(void);
+@property(copy) BOOL (^beforeEdit)(void);
 @property(copy) void (^afterEdit)(void);
 @property double processingRate;
 - (void)setDSPParameters:(DSPParameters*)dsp spatialParameters:(SpatialParameters*)spatial;

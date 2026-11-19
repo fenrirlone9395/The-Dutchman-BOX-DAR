@@ -55,10 +55,12 @@ OSStatus Output::start(AudioDeviceID device) {
     AURenderCallbackStruct cb{callback,this};
     if((s=AudioUnitSetProperty(unit,kAudioUnitProperty_SetRenderCallback,kAudioUnitScope_Input,0,&cb,sizeof(cb)))) return check(s);
     if((s=AudioUnitInitialize(unit))) return check(s);
+    bridge.hrtfError=hrtf.prepare(rate);
+    bridge.hrtfRenderer=bridge.hrtfError?nullptr:&hrtf;
     bridge.callbackTiming.prepare();bridge.captureActivity.prepare();bridge.outputActivity.prepare();
     return noErr; // Construct/initialize only; caller prepares the rate adapter before resume().
 }
-void Output::stop() { if(unit) { AudioOutputUnitStop(unit); AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); unit=nullptr; } }
+void Output::stop() { if(unit) { AudioOutputUnitStop(unit); AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit); unit=nullptr; } bridge.hrtfRenderer=nullptr;hrtf.close();bridge.hrtfError=0; }
 
-void Output::pause() { if(unit) AudioOutputUnitStop(unit); }
+OSStatus Output::pause() { return unit ? AudioOutputUnitStop(unit) : kAudio_ParamError; }
 OSStatus Output::resume() { bridge.lastPlannedResume=mach_absolute_time();bridge.fadeIn(); return unit?AudioOutputUnitStart(unit):kAudio_ParamError; }

@@ -1,5 +1,5 @@
 #ifdef DAR_ENABLE_VST3
-#include "VST3Host.hpp"
+#include "VST3Catalog.hpp"
 #endif
 #import "AURackUI.h"
 #import "RackSlotView.h"
@@ -67,7 +67,7 @@
         [root addArrangedSubview:info]; [info.widthAnchor constraintEqualToAnchor:root.widthAnchor].active=YES;
         if(editable) [self scan:nil];
 #ifdef DAR_ENABLE_VST3
-        vstChoices=cachedVST3Effects();
+        vstChoices=[self loadCachedVST3Effects];
         if([NSBundle.mainBundle.bundleIdentifier isEqualToString:@"local.ryuji.DesktopAudioRack"])[self startVST3Scan:NO];
 #endif
         [self rebuild]; [window center];
@@ -126,6 +126,11 @@
     if(!editable||index<0||size_t(index)>=rack->slots.size())return;
     [[self effectMenuForSlot:index] popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,view.bounds.size.height) inView:view];
 }
+- (BOOL)beginEdit {
+    if(!self.beforeEdit || self.beforeEdit())return YES;
+    info.stringValue=@"出力を一時停止できませんでした。操作を中止しました。";
+    return NO;
+}
 - (BOOL)installEffect:(std::unique_ptr<RackEffect>)slot atIndex:(NSInteger)index {
     if(index==-1)index=[self firstEmptySlot];
     if(!editable||index<0||index>=NSInteger(AURack::maximumSlots))return NO;
@@ -133,7 +138,7 @@
     OSStatus status=slot->prepare(self.processingRate);
     if(status){info.stringValue=[NSString stringWithFormat:@"%@ 初期化失敗 (%d / %s)。Rackは維持します。",[NSString stringWithUTF8String:slot->choice.name.c_str()],int(status),slot->errorDetail()];return NO;}
     if(replacing)slot->bypass=rack->slots[index]->bypass.load();
-    if(self.beforeEdit)self.beforeEdit();
+    if(![self beginEdit])return NO;
     selectedSlot=slot.get();
     if(replacing){[self closeEditors];[presetLists removeObjectForKey:[NSValue valueWithPointer:rack->slots[index].get()]];rack->slots[index]=std::move(slot);}
     else {if(size_t(index)>=rack->slots.size())rack->slots.resize(index+1);rack->slots[index]=std::move(slot);}
@@ -145,12 +150,14 @@
 - (BOOL)moveSlotFrom:(NSInteger)source toSlot:(NSInteger)destination {
     if(!editable||source<0||size_t(source)>=rack->slots.size()||!rack->slots[source]||destination<0||destination>=NSInteger(AURack::maximumSlots))return NO;
     if(destination==source)return YES;
-    if(self.beforeEdit)self.beforeEdit();[self closeEditors];
+    if(![self beginEdit])return NO;
+    [self closeEditors];
     if(size_t(destination)>=rack->slots.size())rack->slots.resize(destination+1);
     std::swap(rack->slots[source],rack->slots[destination]);
     if(self.afterEdit)self.afterEdit();[self rebuild];return YES;
 }
 #ifdef DAR_ENABLE_VST3
+- (std::vector<VST3Choice>)loadCachedVST3Effects { return cachedVST3Effects(); }
 - (void)scanVST3:(id)sender {if(editable)[self startVST3Scan:YES];}
 - (void)startVST3Scan:(BOOL)force {
     if(vstScanRunning)return;vstScanRunning=YES;[self setEditingAllowed:editable];
@@ -215,7 +222,15 @@
     [self refreshStatus];
 }
 - (void)closeEditors { for(auto& slot:rack->slots)if(slot)slot->closeEditor(); for(id token in sizeObservers.allValues) [NSNotificationCenter.defaultCenter removeObserver:token]; [sizeObservers removeAllObjects]; for(NSWindow* w in editors.allValues) { [w close]; w.contentView=nil; } [editors removeAllObjects]; [factories removeAllObjects]; }
-- (void)remove:(NSButton*)sender { if(!editable) return; [presetLists removeObjectForKey:[NSValue valueWithPointer:rack->slots[sender.tag].get()]]; if(self.beforeEdit) self.beforeEdit(); [self closeEditors]; rack->slots[sender.tag].reset(); if(self.afterEdit) self.afterEdit(); [self rebuild]; }
+- (void)remove:(NSButton*)sender {
+    NSInteger index=sender.tag;
+    if(!editable || index<0 || size_t(index)>=rack->slots.size() || !rack->slots[index] || ![self beginEdit])return;
+    [presetLists removeObjectForKey:[NSValue valueWithPointer:rack->slots[index].get()]];
+    [self closeEditors];
+    rack->slots[index].reset();
+    if(self.afterEdit)self.afterEdit();
+    [self rebuild];
+}
 - (void)up:(NSButton*)sender {[self moveSlotFrom:sender.tag toSlot:sender.tag-1];}
 - (void)down:(NSButton*)sender {[self moveSlotFrom:sender.tag toSlot:sender.tag+1];}
 - (void)bypass:(NSButton*)sender { rack->slots[sender.tag]->bypass=sender.state==NSControlStateValueOn; }
@@ -319,10 +334,12 @@
 }
 - (void)applyPresetURL:(NSURL*)url index:(NSInteger)index {
     if(!editable || index<0 || index>=NSInteger(rack->slots.size()))return;
-    auto* slot=rack->slots[index].get();selectedSlot=slot;
+    auto* slot=rack->slots[index].get();
     NSData* data=[NSData dataWithContentsOfURL:url];id state=data?[NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil]:nil;
     if(![self state:state matches:slot]) {info.stringValue=@"このAU用の.aupresetファイルを選択してください。";return;}
-    if(self.beforeEdit)self.beforeEdit();OSStatus s=slot->restore((__bridge CFPropertyListRef)state);
+    if(![self beginEdit])return;
+    selectedSlot=slot;
+    OSStatus s=slot->restore((__bridge CFPropertyListRef)state);
     if(!s) {
         slot->markPreset([[self fileKey:url] UTF8String],url.lastPathComponent.stringByDeletingPathExtension.UTF8String);
         NSValue* cacheKey=[NSValue valueWithPointer:slot];NSArray* cached=presetLists[cacheKey];
@@ -386,7 +403,7 @@
 - (void)selectPreset:(NSMenuItem*)sender {
     NSInteger index=[sender.representedObject[@"slot"] integerValue];
     if(!editable || index<0 || index>=NSInteger(rack->slots.size()))return;
-    if(self.beforeEdit)self.beforeEdit();
+    if(!rack->slots[index] || ![self beginEdit])return;
     selectedSlot=rack->slots[index].get();
     OSStatus s=rack->slots[index]->applyFactoryPreset([sender.representedObject[@"number"] intValue]);
     if(!s)rack->slots[index]->markPreset([[NSString stringWithFormat:@"factory:%d",[sender.representedObject[@"number"] intValue]] UTF8String],sender.title.UTF8String);
@@ -424,7 +441,7 @@
 - (NSDictionary*)rackDocument {
     if(!editable)return nil;
     NSMutableArray* entries=[NSMutableArray new];
-    if(self.beforeEdit) self.beforeEdit();
+    if(![self beginEdit])return nil;
     for(auto& slot:rack->slots) {
         if(!slot){[entries addObject:@{@"empty":@YES}];continue;}
         CFPropertyListRef state=slot->copyState();
@@ -463,7 +480,9 @@
         id state=entry[@"state"];
         if([state[@"format"] isEqual:@"VST3"]){
             if(![state[@"path"] isKindOfClass:NSString.class]||![state[@"cid"] isKindOfClass:NSString.class]){info.stringValue=@"VST3識別情報が不正です。";return NO;}
-            slot=std::make_unique<VST3Effect>(VST3Choice{[state[@"path"] UTF8String],[state[@"cid"] UTF8String],[entry[@"name"] UTF8String]});
+            const auto* choice=VST3Catalog::resolve(vstChoices,state[@"cid"],state[@"path"]);
+            if(!choice){info.stringValue=@"インストール済みVST3を特定できません。Scan VST3で確認してください。元のRackを維持します。";return NO;}
+            slot=std::make_unique<VST3Effect>(*choice);
         }else
 #endif
         slot=std::make_unique<AUEffect>(choice);
@@ -472,7 +491,15 @@
         if(s) { info.stringValue=[NSString stringWithFormat:@"復元失敗 (%d)。元のRackを維持します。",(int)s]; return NO; }
         slot->bypass=[entry[@"bypass"] boolValue]; [self restorePresetMetadata:entry[@"presetSource"] slot:slot.get()]; next.push_back(std::move(slot));
     }
-    if(self.beforeEdit) self.beforeEdit(); [self closeEditors]; [presetLists removeAllObjects]; rack->slots=std::move(next); if(hasSettings)settings.apply(*dspParameters,*spatialParameters); if(self.afterEdit) self.afterEdit(); [self rebuild]; if(hasSettings&&self.settingsDidLoad)self.settingsDidLoad(); info.stringValue=@"Rackを復元しました。ミュート状態を維持して再開します。";
+    if(![self beginEdit])return NO;
+    [self closeEditors];
+    [presetLists removeAllObjects];
+    rack->slots=std::move(next);
+    if(hasSettings)settings.apply(*dspParameters,*spatialParameters);
+    if(self.afterEdit)self.afterEdit();
+    [self rebuild];
+    if(hasSettings&&self.settingsDidLoad)self.settingsDidLoad();
+    info.stringValue=@"Rackを復元しました。";
     return YES;
 }
 - (void)load:(id)sender {

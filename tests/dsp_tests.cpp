@@ -32,7 +32,7 @@ int main() {
         dsp.begin(p,48000,256);
         for(int i=0;i<256;++i) { float l=2,r=-1; dsp.process(l,r); assert(std::abs(l)<=InternalDSP::ceiling+1e-5); assert(std::abs(l+2*r)<1e-5); }
     }
-    assert(dsp.reduction>20); // Both channels share one limiter gain.
+    assert(dsp.reductionDB()>20); // Both channels share one limiter gain.
     p.inputDB=0; p.masterDB=0; p.limiterBypass=true;
     float l=0,r=0;
     for(int block=0;block<1000;++block) { dsp.begin(p,48000,256); for(int i=0;i<256;++i) {l=0.5;r=-0.25;dsp.process(l,r);} }

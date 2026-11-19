@@ -6,6 +6,7 @@
 #include <cstring>
 #include "../../src/RackSettings.hpp"
 @interface AURackUI (VST3Test)
+- (std::vector<VST3Choice>)loadCachedVST3Effects;
 - (BOOL)installEffect:(std::unique_ptr<RackEffect>)slot atIndex:(NSInteger)index;
 - (void)addVST3:(NSMenuItem*)item;
 - (void)addVST3Choice:(const VST3Choice&)choice;
@@ -14,12 +15,26 @@
 - (void)down:(NSButton*)sender;
 - (void)remove:(NSButton*)sender;
 @end
+@interface TestRackUI : AURackUI
+- (instancetype)initWithRack:(AURack*)rack choice:(const VST3Choice&)choice;
+@end
+@implementation TestRackUI {
+    VST3Choice fixtureChoice;
+}
+- (instancetype)initWithRack:(AURack*)rack choice:(const VST3Choice&)choice {
+    if((self=[super initWithRack:rack]))fixtureChoice=choice;
+    return self;
+}
+- (std::vector<VST3Choice>)loadCachedVST3Effects {return {fixtureChoice};}
+@end
 int main(int argc,char** argv){if(argc==3&&!strcmp(argv[1],"--vst3-probe"))return runVST3Probe(argv[2]);@autoreleasepool{
     [NSApplication sharedApplication];AURack rack;
     AUChoice au{{kAudioUnitType_Effect,kAudioUnitSubType_HighPassFilter,kAudioUnitManufacturer_Apple,0,0},"Apple AUHipass"};rack.slots.push_back(std::make_unique<AUEffect>(au));assert(!rack.slots[0]->prepare(48000));rack.slots[0]->bypass=true;
-    AURackUI* ui=[[AURackUI alloc] initWithRack:&rack];[ui show];
-    __block int before=0,after=0;ui.beforeEdit=^{++before;};ui.afterEdit=^{++after;};
-    VST3Choice choice{std::string(getenv("PWD"))+"/build/BOXGain.vst3","424F5854455354310102030405060708","BOX Tests: Deterministic Gain"};
+    NSString* path=[NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:@"build/BOXGain.vst3"].stringByResolvingSymlinksInPath;
+    VST3Choice choice{path.UTF8String,"424F5854455354310102030405060708","BOX Tests: Deterministic Gain"};
+    AURackUI* ui=[[TestRackUI alloc] initWithRack:&rack choice:choice];[ui show];
+    __block BOOL allowPause=YES;
+    __block int before=0,after=0;ui.beforeEdit=^BOOL{++before;return allowPause;};ui.afterEdit=^{++after;};
     [ui addVST3Choice:choice];assert(rack.slots.size()==2&&rack.slots[1]->isVST3());assert(before==1&&after==1);
     NSArray* names=[ui valueForKey:@"labels"];assert([((NSTextField*)names[1]).stringValue hasPrefix:@"[VST3]"]);
     NSArray* presets=[ui valueForKey:@"presetButtons"];assert(!((NSButton*)presets[1]).enabled);
@@ -57,11 +72,22 @@ int main(int argc,char** argv){if(argc==3&&!strcmp(argv[1],"--vst3-probe"))retur
         NSMutableDictionary* broken=[decoded mutableCopy];NSMutableDictionary* settings=[broken[@"settings"] mutableCopy];[settings addEntriesFromDictionary:bad];broken[@"settings"]=settings;auto* current=rack.slots[0].get();
         assert(![ui restoreRackDocument:broken]);assert(current==rack.slots[0].get()&&dsp.inputDB==7.25f&&settingsLoaded==1);
     }
-    NSMutableDictionary* broken=[decoded mutableCopy];NSMutableArray* slots=[broken[@"slots"] mutableCopy];NSMutableDictionary* entry=[slots[1] mutableCopy];NSMutableDictionary* state=[entry[@"state"] mutableCopy];state[@"path"]=@"/nonexistent/BOX.vst3";entry[@"state"]=state;slots[1]=entry;broken[@"slots"]=slots;
-    auto* current=rack.slots[0].get();dsp.inputDB=-3;assert(![ui restoreRackDocument:broken]);assert(current==rack.slots[0].get()&&dsp.inputDB==-3&&settingsLoaded==1);
-    NSMutableDictionary* legacy=[decoded mutableCopy];legacy[@"version"]=@2;[legacy removeObjectForKey:@"settings"];assert([ui restoreRackDocument:legacy]);assert(dsp.inputDB==-3&&settingsLoaded==1);
-    legacy[@"version"]=@1;legacy[@"slots"]=@[legacy[@"slots"][0]];assert([ui restoreRackDocument:legacy]);assert(dsp.inputDB==-3&&settingsLoaded==1);
-    assert([ui restoreRackDocument:decoded]);assert(settingsLoaded==2&&dsp.inputDB==7.25f);
+    NSMutableDictionary* broken=[decoded mutableCopy];NSMutableArray* slots=[broken[@"slots"] mutableCopy];NSMutableDictionary* entry=[slots[1] mutableCopy];NSMutableDictionary* state=[entry[@"state"] mutableCopy];state[@"path"]=@"OldLocation/BOX.vst3";entry[@"state"]=state;slots[1]=entry;broken[@"slots"]=slots;
+    assert([ui restoreRackDocument:broken]);assert(settingsLoaded==2);
+    auto* current=rack.slots[0].get();
+    state[@"cid"]=@"00000000000000000000000000000000";state[@"path"]=path;
+    dsp.inputDB=-3;assert(![ui restoreRackDocument:broken]);assert(current==rack.slots[0].get()&&dsp.inputDB==-3&&settingsLoaded==2);
+    allowPause=NO;
+    int previousAfter=after;
+    assert(![ui rackDocument] && ![ui restoreRackDocument:decoded]);
+    assert(![ui installEffect:std::make_unique<AUEffect>(au) atIndex:1]);
+    NSButton* blocked=[NSButton new];blocked.tag=1;auto* existingVST=rack.slots[1].get();
+    [ui up:blocked];[ui remove:blocked];
+    assert(rack.slots[0].get()==current && rack.slots[1].get()==existingVST && dsp.inputDB==-3 && after==previousAfter);
+    allowPause=YES;
+    NSMutableDictionary* legacy=[decoded mutableCopy];legacy[@"version"]=@2;[legacy removeObjectForKey:@"settings"];assert([ui restoreRackDocument:legacy]);assert(dsp.inputDB==-3&&settingsLoaded==2);
+    legacy[@"version"]=@1;legacy[@"slots"]=@[legacy[@"slots"][0]];assert([ui restoreRackDocument:legacy]);assert(dsp.inputDB==-3&&settingsLoaded==2);
+    assert([ui restoreRackDocument:decoded]);assert(settingsLoaded==3&&dsp.inputDB==7.25f);
     before=after=1; // subsequent edit assertions count only their own pause/resume boundaries.
     NSButton* button=[NSButton new];button.tag=1;[ui editor:button];bool visible=false;for(NSWindow* w in NSApp.windows)if([w.title containsString:@"BOX Tests"]&&w.visible)visible=true;assert(visible);
     [ui up:button];assert(rack.slots[0]->isVST3());button.tag=0;[ui down:button];assert(rack.slots[1]->isVST3());button.tag=1;[ui editor:button];[ui remove:button];assert(rack.slots.size()==2&&!rack.slots[1]&&!rack.slots[0]->isVST3());assert(before==4&&after==4);
@@ -73,5 +99,5 @@ int main(int argc,char** argv){if(argc==3&&!strcmp(argv[1],"--vst3-probe"))retur
     [ui setValue:@YES forKey:@"vstScanRunning"];[ui setEditingAllowed:YES];bool scanDisabled=false,saveEnabled=false;
     for(NSButton* control in [ui valueForKey:@"editButtons"]){if([control.title isEqualToString:@"Scan VST3"])scanDisabled=!control.enabled;if([control.title isEqualToString:@"Save the Rack…"])saveEnabled=control.enabled;}assert(scanDisabled&&saveEnabled);
     [ui setValue:@NO forKey:@"vstScanRunning"];[ui setEditingAllowed:YES];
-    [ui closeEditors];puts("PASS: mixed AU/VST3 + Gain/GEQ/Spatial file roundtrip, legacy v1/v2, invalid settings/missing plugin preserve state, stable VST3 preset disabled state across 120 running ticks, Save/Load the Rack labels, AU/VST3 mixed rack, GUI routing, host preset controls disabled, stereo/chunking/headroom, reorder/remove closes editors, failed insertion preserves rack");
+    [ui closeEditors];puts("PASS: mixed AU/VST3 + Gain/GEQ/Spatial file roundtrip, legacy v1/v2, invalid settings/unknown plugin and pause failure preserve state, relocated class ID, stable VST3 preset disabled state across 120 running ticks, Save/Load the Rack labels, AU/VST3 mixed rack, GUI routing, host preset controls disabled, stereo/chunking/headroom, reorder/remove closes editors, failed insertion preserves rack");
 }}

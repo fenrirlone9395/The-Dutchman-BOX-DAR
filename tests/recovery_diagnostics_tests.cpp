@@ -4,13 +4,18 @@
 #include <thread>
 #include <vector>
 int main(){
-    // Reproduce a frozen block write limit. Do not change that behavior in this investigation.
+    // A producer can publish more input than the block-entry snapshot contains.
     {ClockRateAdapter a;a.prepare(48000,48000,{});auto reader=[](int64_t){return std::array<float,2>{.125f,.125f};};uint64_t frozen=2048;float l,r;
-     for(int block=0;block<3;++block){a.begin(frozen,512);for(size_t i=0;i<512;++i)a.next(frozen,i,512,reader,l,r);}
-     a.begin(frozen,512);uint64_t live=frozen+512;
-     bool available=a.next(frozen,0,512,reader,l,r);
-     assert(!available && a.telemetry.recoveries==1 && live-a.consumed()>a.requiredInput(a.stepAt(0,512)));
-     printf("REPRO frozen write limit: snapshot available=%llu, current available=%llu, needed=%zu; recovery despite newer published input (synthetic scheduling case)\n",(unsigned long long)(frozen-a.consumed()),(unsigned long long)(live-a.consumed()),a.requiredInput(a.stepAt(0,512)));
+     a.begin(frozen,512); // At the target fill the initial conversion ratio is exactly one.
+     const auto needed=a.requiredInput(a.stepAt(0,512));
+     while(frozen-a.consumed()>=needed)assert(a.next(frozen,0,512,reader,l,r));
+     a.begin(frozen,512);uint64_t available=frozen,live=frozen+512;int refreshes=0;
+     assert(available-a.consumed()<a.requiredInput(a.stepAt(0,512)));
+     const auto refresh=[&]{++refreshes;return live;};
+     assert(a.next(available,0,512,reader,refresh,l,r));
+     assert(available==live && refreshes==1 && a.isPrimed() && a.telemetry.recoveries==0);
+     assert(a.next(available,1,512,reader,refresh,l,r) && refreshes==1);
+     puts("PASS: lookahead shortage checks live input once and continues without re-priming");
     }
     // Observe one true source pause, then re-priming and the exact zero-input frame count.
     {AudioBridge b;b.captureRate=48000;b.rateAdapter.prepare(48000,48000,{});b.parameters.eqBypass=true;b.parameters.limiterBypass=true;b.muted=false;

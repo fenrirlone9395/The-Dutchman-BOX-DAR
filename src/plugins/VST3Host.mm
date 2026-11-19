@@ -33,7 +33,10 @@ struct Module {
     explicit Module(const std::string& path) {
         NSURL* url=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
         bundle=CFBundleCreate(nullptr,(__bridge CFURLRef)url);
-        if(!bundle || !CFBundleLoadExecutable(bundle))return;
+        if(!bundle)return;
+        NSURL* executable=CFBridgingRelease(CFBundleCopyExecutableURL(bundle));
+        NSString* prefix=[url.URLByResolvingSymlinksInPath.path stringByAppendingString:@"/"];
+        if(![executable.URLByResolvingSymlinksInPath.path hasPrefix:prefix] || !CFBundleLoadExecutable(bundle))return;
         auto entry=(bool(*)(CFBundleRef))CFBundleGetFunctionPointerForName(bundle,CFSTR("bundleEntry"));
         exit=(bool(*)())CFBundleGetFunctionPointerForName(bundle,CFSTR("bundleExit"));
         auto get=(IPluginFactory*(*)())CFBundleGetFunctionPointerForName(bundle,CFSTR("GetPluginFactory"));
@@ -72,9 +75,69 @@ struct Changes : IParameterChanges {
         for(int i=0;i<count;++i)if(queues[i].id==id){index=i;return &queues[i];}
         if(count==int(queues.size()))return nullptr;index=count++;auto& q=queues[index];q.id=id;q.used=false;return &q;
     }
-    bool set(ParamID id,ParamValue v){int32 i;if(auto* q=addParameterData(id,i)){q->addPoint(0,v,i);return true;}return false;}
 };
 struct Edit {ParamID id;ParamValue value;};
+// One last value per declared parameter; a stopped or bypassed processor can
+// retain edits indefinitely without growing a queue or losing the latest value.
+class PendingEdits {
+    static constexpr ParamValue empty=-1;
+    static_assert(std::atomic<ParamValue>::is_always_lock_free);
+    std::vector<ParamID> ids;
+    std::unique_ptr<std::atomic<ParamValue>[]> values;
+    std::atomic<bool> pending{false};
+    size_t cursor=0;
+public:
+    void prepare(IEditController& controller){
+        const auto count=controller.getParameterCount();
+        for(int32 i=0;i<count;++i){
+            ParameterInfo info{};
+            if(controller.getParameterInfo(i,info)==kResultOk)ids.push_back(info.id);
+        }
+        std::sort(ids.begin(),ids.end());
+        ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+        values=std::make_unique<std::atomic<ParamValue>[]>(ids.size());
+        clear();
+    }
+    size_t size()const{return ids.size();}
+    bool contains(ParamID id)const{return std::binary_search(ids.begin(),ids.end(),id);}
+    bool put(Edit edit){
+        auto it=std::lower_bound(ids.begin(),ids.end(),edit.id);
+        if(it==ids.end() || *it!=edit.id)return false;
+        values[it-ids.begin()].store(edit.value,std::memory_order_relaxed);
+        pending.store(true,std::memory_order_release);
+        return true;
+    }
+    void clear(){
+        for(size_t i=0;i<ids.size();++i)values[i].store(empty,std::memory_order_relaxed);
+        cursor=0;
+        pending.store(false,std::memory_order_relaxed);
+    }
+    void drain(Changes& changes){
+        if(!pending.load(std::memory_order_relaxed))return;
+        pending.exchange(false,std::memory_order_acquire);
+        // Give later IDs a turn if a full controller refresh spans blocks.
+        for(size_t i=0;i<ids.size();++i){
+            size_t index=cursor;
+            if(++cursor==ids.size())cursor=0;
+            if(values[index].load(std::memory_order_relaxed)==empty)continue;
+            auto value=values[index].exchange(empty,std::memory_order_relaxed);
+            auto& queue=changes.queues[changes.count++];
+            queue.id=ids[index];queue.value=value;queue.used=true;
+            if(size_t(changes.count)==changes.queues.size()){
+                pending.store(true,std::memory_order_release);
+                break;
+            }
+        }
+    }
+    NSArray* snapshot()const{
+        NSMutableArray* edits=[NSMutableArray new];
+        for(size_t i=0;i<ids.size();++i){
+            auto value=values[i].load(std::memory_order_relaxed);
+            if(value!=empty)[edits addObject:@[@(ids[i]),@(value)]];
+        }
+        return edits;
+    }
+};
 struct Transfer {
     static constexpr size_t capacity=2048;
     std::array<Edit,capacity> data;std::atomic<size_t> read{0},write{0};
@@ -90,7 +153,7 @@ struct VST3Effect::Impl final : IComponentHandler, IPlugFrame {
     NSPanel* panel=nil;NSView* parent=nil;NSScrollView* scroll=nil;
     std::string stage="not initialized";
     double rate=48000;int64 sampleTime=0;std::atomic<uint32> latencyFrames{0};
-    std::atomic<int32> restart{0};Transfer toAudio,toUI;Changes inputChanges,outputChanges;
+    std::atomic<int32> restart{0};PendingEdits toAudio;Transfer toUI;Changes inputChanges,outputChanges;
     static constexpr int maximumBuses=8,maximumChannels=64;
     int32 inputCount=0,outputCount=0;
     std::array<AudioBusBuffers,maximumBuses> inputBuses{},outputBuses{};
@@ -105,7 +168,7 @@ struct VST3Effect::Impl final : IComponentHandler, IPlugFrame {
     tresult PLUGIN_API beginEdit(ParamID) override{return kResultOk;}
     tresult PLUGIN_API performEdit(ParamID id,ParamValue value) override {
         if(!std::isfinite(value)||value<0||value>1)return kInvalidArgument;
-        if(!toAudio.push({id,value})){owner.error=kAudio_ParamError;return kOutOfMemory;}return kResultOk;
+        return toAudio.put({id,value})?kResultOk:kInvalidArgument;
     }
     tresult PLUGIN_API endEdit(ParamID) override{return kResultOk;}
     tresult PLUGIN_API restartComponent(int32 flags) override {restart.fetch_or(flags);return kResultOk;}
@@ -124,15 +187,15 @@ struct VST3Effect::Impl final : IComponentHandler, IPlugFrame {
     void stop(){if(processing){processor->setProcessing(false);processing=false;}if(active){component->setActive(false);active=false;}}
     ~Impl(){closeEditor();stop();if(componentProxy)componentProxy->disconnect();if(controllerProxy)controllerProxy->disconnect();drop(componentProxy);drop(controllerProxy);if(controller)controller->setComponentHandler(nullptr);drop(processor);if(controllerInitialized)controller->terminate();drop(controller);if(initialized)component->terminate();drop(component);}
     bool open(const VST3Choice& choice){
+        TUID id;stage="class ID";if(!parseID(choice.cid,id))return false;
         stage="module load";module=::module(choice.path);if(!module->factory)return false;
         if(auto* factory3=query<IPluginFactory3>(module->factory)){factory3->setHostContext(&hostContext());drop(factory3);}
-        TUID id;if(!parseID(choice.cid,id))return false;
         stage="factory.createInstance(IComponent)";if(module->factory->createInstance(id,IComponent::iid,(void**)&component)!=kResultOk||!component)return false;
         stage="component.initialize";if(component->initialize(&hostContext())!=kResultOk)return false;initialized=true;
         stage="query IAudioProcessor";processor=query<IAudioProcessor>(component);if(!processor)return false;
         controller=query<IEditController>(component);
         if(!controller){TUID cid;if(component->getControllerClassId(cid)==kResultOk&&module->factory->createInstance(cid,IEditController::iid,(void**)&controller)==kResultOk&&controller){stage="controller.initialize";if(controller->initialize(&hostContext())!=kResultOk)return false;controllerInitialized=true;}}
-        if(controller){controller->setComponentHandler(this);if(controllerInitialized){auto* cp=query<IConnectionPoint>(component);auto* ep=query<IConnectionPoint>(controller);if(cp&&ep){componentProxy=new ConnectionProxy(cp);controllerProxy=new ConnectionProxy(ep);componentProxy->connect(ep);controllerProxy->connect(cp);}drop(cp);drop(ep);}
+        if(controller){toAudio.prepare(*controller);controller->setComponentHandler(this);if(controllerInitialized){auto* cp=query<IConnectionPoint>(component);auto* ep=query<IConnectionPoint>(controller);if(cp&&ep){componentProxy=new ConnectionProxy(cp);controllerProxy=new ConnectionProxy(ep);componentProxy->connect(ep);controllerProxy->connect(cp);}drop(cp);drop(ep);}
             MemoryStream state;if(component->getState(&state)==kResultOk){state.seek(0,IBStream::kIBSeekSet,nullptr);controller->setComponentState(&state);}}
         return true;
     }
@@ -195,7 +258,7 @@ void VST3Effect::process(float* l,float* r,UInt32 frames){
     auto& p=*impl;if(bypass||error||!p.processing||(p.restart.load()&(kIoChanged|kReloadComponent))){p.sampleTime+=frames;return;}
     if(frames>4096){error=kAudioUnitErr_TooManyFramesToProcess;return;}
     memcpy(p.inL.data(),l,frames*4);memcpy(p.inR.data(),r,frames*4);std::fill_n(p.outL.data(),frames,0);std::fill_n(p.outR.data(),frames,0);
-    p.inputChanges.count=0;p.outputChanges.count=0;Edit e;for(size_t i=0;i<Transfer::capacity&&p.toAudio.pop(e);++i)if(!p.inputChanges.set(e.id,e.value)){error=kAudio_ParamError;return;}
+    p.inputChanges.count=0;p.outputChanges.count=0;p.toAudio.drain(p.inputChanges);
     for(int32 b=0;b<p.inputCount;++b)p.inputBuses[b].silenceFlags=0;
     for(int32 b=0;b<p.outputCount;++b)p.outputBuses[b].silenceFlags=0;
     auto& output=p.outputBuses[0];
@@ -228,13 +291,50 @@ void VST3Effect::idle(){auto& p=*impl;Edit e;while(p.toUI.pop(e))if(p.controller
 CFPropertyListRef VST3Effect::copyState() const{
     auto& p=*impl;if(!p.component)return nullptr;MemoryStream state,controller;
     if(p.component->getState(&state)!=kResultOk)return nullptr;if(p.controller)p.controller->getState(&controller);
-    NSDictionary* result=@{@"format":@"VST3",@"path":[NSString stringWithUTF8String:vst.path.c_str()],@"cid":[NSString stringWithUTF8String:vst.cid.c_str()],@"component":[NSData dataWithBytes:state.getData() length:state.getSize()],@"controller":[NSData dataWithBytes:controller.getData() length:controller.getSize()]};return CFBridgingRetain(result);
+    NSDictionary* result=@{
+        @"format":@"VST3",
+        @"path":[NSString stringWithUTF8String:vst.path.c_str()],
+        @"cid":[NSString stringWithUTF8String:vst.cid.c_str()],
+        @"component":[NSData dataWithBytes:state.getData() length:state.getSize()],
+        @"controller":[NSData dataWithBytes:controller.getData() length:controller.getSize()],
+        @"pendingEdits":p.toAudio.snapshot()
+    };
+    return CFBridgingRetain(result);
 }
 OSStatus VST3Effect::restore(CFPropertyListRef value){
-    id state=(__bridge id)value;if(![state isKindOfClass:NSDictionary.class]||![state[@"format"] isEqual:@"VST3"]||![state[@"cid"] isEqual:[NSString stringWithUTF8String:vst.cid.c_str()]])return kAudio_ParamError;
-    NSData* a=state[@"component"];NSData* b=state[@"controller"];if(![a isKindOfClass:NSData.class]||![b isKindOfClass:NSData.class]||a.length>64*1024*1024||b.length>64*1024*1024)return kAudio_ParamError;
-    auto& p=*impl;Edit discarded;while(p.toAudio.pop(discarded)){}while(p.toUI.pop(discarded)){}MemoryStream stream((void*)a.bytes,a.length);if(p.component->setState(&stream)!=kResultOk)return kAudio_ParamError;
-    if(p.controller){stream.seek(0,IBStream::kIBSeekSet,nullptr);p.controller->setComponentState(&stream);if(b.length){MemoryStream ctrl((void*)b.bytes,b.length);p.controller->setState(&ctrl);}}return 0;
+    id state=(__bridge id)value;
+    if(![state isKindOfClass:NSDictionary.class]||![state[@"format"] isEqual:@"VST3"]||![state[@"cid"] isKindOfClass:NSString.class]||
+       [state[@"cid"] caseInsensitiveCompare:[NSString stringWithUTF8String:vst.cid.c_str()]]!=NSOrderedSame)return kAudio_ParamError;
+    NSData* a=state[@"component"];NSData* b=state[@"controller"];
+    if(![a isKindOfClass:NSData.class]||![b isKindOfClass:NSData.class]||a.length>64*1024*1024||b.length>64*1024*1024)return kAudio_ParamError;
+
+    auto& p=*impl;
+    if(!p.component)return kAudio_ParamError;
+    id pending=state[@"pendingEdits"];
+    if(pending && (![pending isKindOfClass:NSArray.class] || [pending count]>p.toAudio.size()))return kAudio_ParamError;
+    std::vector<Edit> edits;
+    for(id edit in pending){
+        if(![edit isKindOfClass:NSArray.class] || [edit count]!=2 ||
+           ![edit[0] isKindOfClass:NSNumber.class] || ![edit[1] isKindOfClass:NSNumber.class])return kAudio_ParamError;
+        double identifier=[edit[0] doubleValue],normalized=[edit[1] doubleValue];
+        if(!std::isfinite(identifier) || identifier<0 || identifier>UINT32_MAX || std::floor(identifier)!=identifier ||
+           !std::isfinite(normalized) || normalized<0 || normalized>1 || !p.toAudio.contains(ParamID(identifier)))return kAudio_ParamError;
+        edits.push_back({ParamID(identifier),normalized});
+    }
+
+    p.toAudio.clear();
+    Edit discarded;while(p.toUI.pop(discarded)){}
+    MemoryStream stream((void*)a.bytes,a.length);
+    if(p.component->setState(&stream)!=kResultOk)return kAudio_ParamError;
+    if(p.controller){
+        stream.seek(0,IBStream::kIBSeekSet,nullptr);p.controller->setComponentState(&stream);
+        if(b.length){MemoryStream ctrl((void*)b.bytes,b.length);p.controller->setState(&ctrl);}
+        for(auto edit:edits){
+            p.controller->setParamNormalized(edit.id,edit.value);
+            p.toAudio.put(edit);
+        }
+    }
+    return noErr;
 }
 int runVST3Probe(const char* path){@autoreleasepool{
     auto m=module(path);if(!m->factory)return 2;if(auto* factory3=query<IPluginFactory3>(m->factory)){factory3->setHostContext(&hostContext());drop(factory3);}PFactoryInfo factory{};m->factory->getFactoryInfo(&factory);auto* f2=query<IPluginFactory2>(m->factory);NSMutableArray* list=[NSMutableArray new];
@@ -242,13 +342,32 @@ int runVST3Probe(const char* path){@autoreleasepool{
         std::string name=std::string(factory.vendor)+": "+info.name;[list addObject:@{@"path":[NSString stringWithUTF8String:path],@"cid":[NSString stringWithUTF8String:hexID(info.cid).c_str()],@"name":[NSString stringWithUTF8String:name.c_str()]}];}
     drop(f2);NSData* data=[NSPropertyListSerialization dataWithPropertyList:list format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];fwrite(data.bytes,1,data.length,stdout);return 0;
 }}
-std::vector<VST3Choice> cachedVST3Effects(){return VST3Catalog::cached(VST3Catalog::cacheURL());}
+static NSArray<NSString*>* vst3Roots(){
+    return @[@"/Library/Audio/Plug-Ins/VST3",[@"~/Library/Audio/Plug-Ins/VST3" stringByExpandingTildeInPath]];
+}
+static std::vector<VST3Choice> installedChoices(std::vector<VST3Choice> choices,NSArray<NSString*>* roots){
+    std::vector<VST3Choice> installed;
+    installed.reserve(choices.size());
+    for(auto& choice:choices){
+        NSString* canonical=VST3Catalog::installedBundle([NSString stringWithUTF8String:choice.path.c_str()],roots);
+        if(!canonical)continue;
+        choice.path=canonical.UTF8String;
+        installed.push_back(std::move(choice));
+    }
+    return installed;
+}
+std::vector<VST3Choice> cachedVST3Effects(){
+    return installedChoices(VST3Catalog::cached(VST3Catalog::cacheURL()),vst3Roots());
+}
 std::vector<VST3Choice> scanVST3Effects(std::string& report,bool force){
- return VST3Catalog::scan(@[@"/Library/Audio/Plug-Ins/VST3",[@"~/Library/Audio/Plug-Ins/VST3" stringByExpandingTildeInPath]],VST3Catalog::cacheURL(),force,[](NSString* path)->NSArray*{
+ NSArray<NSString*>* roots=vst3Roots();
+ auto choices=VST3Catalog::scan(roots,VST3Catalog::cacheURL(),force,[&](NSString* path)->NSArray*{
+    if(!VST3Catalog::installedBundle(path,roots))return nil;
     NSString* temp=[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];[NSFileManager.defaultManager createFileAtPath:temp contents:nil attributes:nil];NSFileHandle* file=[NSFileHandle fileHandleForWritingAtPath:temp];
     NSTask* task=[NSTask new];task.executableURL=NSBundle.mainBundle.executableURL;task.arguments=@[@"--vst3-probe",path];task.standardOutput=file;task.standardError=NSFileHandle.fileHandleWithNullDevice;
     BOOL launched=[task launchAndReturnError:nil];BOOL timedOut=NO;NSDate* deadline=[NSDate dateWithTimeIntervalSinceNow:8];while(launched&&task.running&&deadline.timeIntervalSinceNow>0)[NSThread sleepForTimeInterval:.02];if(launched&&task.running){timedOut=YES;kill(task.processIdentifier,SIGKILL);[task waitUntilExit];}
     [file closeFile];NSData* data=[NSData dataWithContentsOfFile:temp];[NSFileManager.defaultManager removeItemAtPath:temp error:nil];if(!launched||timedOut||task.terminationStatus||data.length>8*1024*1024)return nil;
     id list=data?[NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil]:nil;return [list isKindOfClass:NSArray.class]?list:nil;
  },report);
+ return installedChoices(std::move(choices),roots);
 }

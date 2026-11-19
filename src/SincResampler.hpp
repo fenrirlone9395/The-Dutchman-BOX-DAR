@@ -14,14 +14,17 @@ class SincResampler {
     static constexpr size_t phases=2048;
     std::vector<float> table;
     size_t length=0;
+    double tableRatio=0;
     static double i0(double x) {double sum=1,term=1;for(int k=1;k<80;++k){term*=x*x/(4*k*k);sum+=term;if(term<sum*1e-16)break;}return sum;}
 public:
     void prepare(double inputRate,double outputRate) {
         if(!std::isfinite(inputRate)||!std::isfinite(outputRate)||inputRate<8000||outputRate<8000||inputRate>192000||outputRate>192000)throw std::invalid_argument("Unsupported rate");
         double ratio=inputRate/outputRate;
-        length=size_t(std::ceil(1024*std::max(1.,ratio)/32))*32;
-        if(length>8192)throw std::invalid_argument("Sinc table budget exceeded for this rate pair; use Legacy");
-        table.resize((phases+1)*length);
+        if(ratio==tableRatio)return;
+        const auto nextLength=size_t(std::ceil(1024*std::max(1.,ratio)/32))*32;
+        if(nextLength>8192)throw std::invalid_argument("Sinc table budget exceeded for this rate pair; use Legacy");
+        table.resize((phases+1)*nextLength);
+        length=nextLength;
         // Passband/stopband transition centered at 99% of the lower Nyquist.
         // Guard against the full +/-1000ppm ASRC ratio range.
         double cutoff=.99*std::min(1.,1/(ratio*1.001)),beta=12,normal=i0(beta);
@@ -35,6 +38,7 @@ public:
             }
             for(size_t k=0;k<length;++k)table[p*length+k]/=sum;
         }
+        tableRatio=ratio;
     }
     size_t taps()const{return length;}
     size_t lookahead()const{return length/2;}
