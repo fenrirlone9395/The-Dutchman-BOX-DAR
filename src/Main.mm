@@ -6,6 +6,7 @@
 #import <CoreMedia/CoreMedia.h>
 #include "Output.hpp"
 #include "ProcessTap.hpp"
+#include "ApplicationAudio.hpp"
 #include <memory>
 #import "MeterView.h"
 #import "Theme.h"
@@ -49,6 +50,8 @@
     dispatch_queue_t captureQueue;
     SCStream* stream;
     SCContentFilter* selectedFilter;
+    NSRunningApplication* selectedApplication;
+    std::vector<AudioObjectID> applicationTapTargets;
     NSWindow* window;
     NSPopUpButton* devices;
     NSButton *startButton,*selectButton,*systemButton,*muteButton,*refreshButton;
@@ -65,7 +68,8 @@
     DARSpatialView* spatialView;
     NSButton* spatialSummary;
     NSButton* eqSummary;
-    double lastDeviceCheck,lastPresetCheck;
+    double lastDeviceCheck,lastPresetCheck,applicationTapStartedAt;
+    NSString* applicationTapFailure;
     BOOL editWasRunning;
     BOOL busy,running;
     AudioDeviceID activeDevice;
@@ -176,11 +180,16 @@
             }];std::exit(saved?0:1);
         }return;
     }
-    SCContentSharingPicker* picker=SCContentSharingPicker.sharedPicker;
-    SCContentSharingPickerConfiguration* config=[SCContentSharingPickerConfiguration new];
-    config.allowedPickerModes=SCContentSharingPickerModeSingleApplication;
-    config.excludedBundleIDs=NSBundle.mainBundle.bundleIdentifier?@[NSBundle.mainBundle.bundleIdentifier]:@[]; config.allowsChangingSelectedContent=NO;
-    picker.defaultConfiguration=config; [picker addObserver:self]; picker.active=YES;
+    if(@available(macOS 14.2,*)) {
+        // The audio-only path uses the Core Audio process list.
+    }else{
+        SCContentSharingPicker* picker=SCContentSharingPicker.sharedPicker;
+        SCContentSharingPickerConfiguration* config=[SCContentSharingPickerConfiguration new];
+        config.allowedPickerModes=SCContentSharingPickerModeSingleApplication;
+        config.excludedBundleIDs=NSBundle.mainBundle.bundleIdentifier?@[NSBundle.mainBundle.bundleIdentifier]:@[];
+        config.allowsChangingSelectedContent=NO;
+        picker.defaultConfiguration=config;[picker addObserver:self];picker.active=YES;
+    }
     timer=[NSTimer scheduledTimerWithTimeInterval:1.0/30.0 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     [window center]; [window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
@@ -247,12 +256,15 @@
 - (void)applicationWillTerminate:(NSNotification*)note { accepting=false; bridge.muted=true; output->stop(); processTap->stop(); [auUI closeEditors]; [stream stopCaptureWithCompletionHandler:nil]; }
 - (void)controls {
     [auUI setEditingAllowed:!busy];
-    startButton.enabled=!busy && (running || ((selectedFilter || systemTapSelected) && devices.numberOfItems));
+    startButton.enabled=!busy && (running || ((selectedFilter || [self usesProcessTap]) && devices.numberOfItems));
     startButton.title=running?@"Stop":@"Start";
     selectButton.enabled=systemButton.enabled=refreshButton.enabled=!busy&&!running;
     devices.enabled=!busy; muteButton.enabled=running&&!busy;
     muteButton.title=bridge.muted?@"出力を有効にする":@"Emergency Mute";
-    if(running&&!busy) status.stringValue=bridge.muted?@"● MUTED — 出力ミュート中":@"● LIVE — 音声処理・出力中";
+    if(running&&!busy) {
+        if(selectedApplication && !processTap->inputBlockCount())status.stringValue=@"Application Tap — 音声入力待ち";
+        else status.stringValue=bridge.muted?@"● MUTED — 出力ミュート中":@"● LIVE — 音声処理・出力中";
+    }
 }
 - (void)refresh:(id)sender {
     NSNumber* old=devices.selectedItem.representedObject;
@@ -260,17 +272,67 @@
     for(auto& d:outputDevices()) { [devices addItemWithTitle:[NSString stringWithUTF8String:d.name.c_str()]]; devices.lastItem.representedObject=@(d.id); if([old isEqual:@(d.id)]) [devices selectItem:devices.lastItem]; }
     [self controls];
 }
-- (void)selectSource:(id)sender { [SCContentSharingPicker.sharedPicker present]; }
+- (BOOL)usesProcessTap {return systemTapSelected||selectedApplication!=nil;}
+- (NSMenu*)webkitSourceMenu {
+    NSMenu* menu=[NSMenu new];
+    [menu addItemWithTitle:@"音声を出すプロセスを選択" action:nil keyEquivalent:@""];
+    for(NSRunningApplication* helper in webkitAudioApplications()){
+        auto audio=applicationAudioProcesses(helper);
+        NSString* title=[NSString stringWithFormat:@"%@%@",helper.localizedName?:@"WebKit Audio",audio.active?@"（再生中）":@""];
+        NSMenuItem* item=[[NSMenuItem alloc] initWithTitle:title action:@selector(selectApplication:) keyEquivalent:@""];
+        item.target=self;item.representedObject=helper;
+        if([helper isEqual:selectedApplication])item.state=NSControlStateValueOn;
+        [menu addItem:item];
+    }
+    if(menu.numberOfItems==1)[menu addItemWithTitle:@"Safariで再生を始めてから開き直してください" action:nil keyEquivalent:@""];
+    return menu;
+}
+- (NSMenu*)applicationSourceMenu {
+    NSMenu* menu=[NSMenu new];
+    NSArray<NSRunningApplication*>* runningApps=[NSWorkspace.sharedWorkspace.runningApplications sortedArrayUsingComparator:^NSComparisonResult(NSRunningApplication* a,NSRunningApplication* b){
+        return [(a.localizedName?:@"") localizedStandardCompare:(b.localizedName?:@"")];
+    }];
+    for(NSRunningApplication* application in runningApps){
+        if(application.terminated || application.processIdentifier==getpid() ||
+           application.activationPolicy!=NSApplicationActivationPolicyRegular || !application.localizedName.length)continue;
+        NSMenuItem* item=[[NSMenuItem alloc] initWithTitle:application.localizedName action:@selector(selectApplication:) keyEquivalent:@""];
+        item.target=self;item.representedObject=application;
+        if([application.bundleIdentifier isEqualToString:@"com.apple.Safari"]){
+            item.action=nil;item.submenu=[self webkitSourceMenu];
+        }
+        if([application isEqual:selectedApplication])item.state=NSControlStateValueOn;
+        [menu addItem:item];
+    }
+    if(!menu.numberOfItems)[menu addItemWithTitle:@"選択できるアプリがありません" action:nil keyEquivalent:@""];
+    return menu;
+}
+- (void)selectApplication:(NSMenuItem*)sender {
+    if(busy||running)return;
+    NSRunningApplication* application=sender.representedObject;
+    if(![application isKindOfClass:NSRunningApplication.class] || application.terminated || application.processIdentifier==getpid())return;
+    systemTapSelected=NO;selectedFilter=nil;selectedApplication=application;
+    NSRunningApplication* owner=applicationAudioOwner(application);
+    if(chromiumPWAParent(application.bundleIdentifier))
+        sourceLabel.stringValue=[NSString stringWithFormat:@"入力：%@ → %@全体 / Application Tap（ブラウザ全体の原音をミュート）",application.localizedName?:@"Web App",owner.localizedName?:@"Browser"];
+    else sourceLabel.stringValue=[NSString stringWithFormat:@"入力：%@ / Application Tap（Start中は選択したアプリの原音をミュート）",application.localizedName?:@"Application"];
+    [self controls];
+}
+- (void)selectSource:(NSButton*)sender {
+    if(busy||running)return;
+    if(@available(macOS 14.2,*)) {
+        [[self applicationSourceMenu] popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(sender.bounds)) inView:sender];
+    }else [SCContentSharingPicker.sharedPicker present];
+}
 - (void)systemSource:(id)sender {
     if(@available(macOS 14.2,*)) {
-        systemTapSelected=YES;
+        systemTapSelected=YES;selectedApplication=nil;selectedFilter=nil;
         sourceLabel.stringValue=@"入力：System Audio / 通常出力のch 1/2・Direct Tap（Start中は元音声ミュート）";
         [self controls];
     } else status.stringValue=@"元音声のミュートにはmacOS 14.2以降が必要です。";
 }
 
 - (void)contentSharingPicker:(SCContentSharingPicker*)picker didUpdateWithFilter:(SCContentFilter*)filter forStream:(SCStream*)s {
-    dispatch_async(dispatch_get_main_queue(),^{ if(!running&&!busy) { systemTapSelected=NO; selectedFilter=filter; sourceLabel.stringValue=@"入力：標準ピッカーで選択したアプリ / 48,000 Hz / Stereo"; [self controls]; } });
+    dispatch_async(dispatch_get_main_queue(),^{ if(!running&&!busy) { systemTapSelected=NO; selectedApplication=nil; selectedFilter=filter; sourceLabel.stringValue=@"入力：標準ピッカー / 48,000 Hz / Stereo（原音はミュートされません）"; [self controls]; } });
 }
 - (void)contentSharingPicker:(SCContentSharingPicker*)picker didCancelForStream:(SCStream*)s {}
 - (void)contentSharingPickerStartDidFailWithError:(NSError*)error { dispatch_async(dispatch_get_main_queue(),^{ status.stringValue=error.localizedDescription; }); }
@@ -280,6 +342,7 @@
         NSScrollView* scroll=[[NSScrollView alloc] initWithFrame:diagnosticsPanel.contentView.bounds];scroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;scroll.hasVerticalScroller=YES;
         diagnosticsText=[[NSTextView alloc] initWithFrame:scroll.bounds];diagnosticsText.editable=NO;diagnosticsText.font=[NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];diagnosticsText.autoresizingMask=NSViewWidthSizable;scroll.documentView=diagnosticsText;[diagnosticsPanel.contentView addSubview:scroll];}
     if(!running)diagnosticsText.string=@"Stopped. Clock snapshots are collected on Start.\nAuto Clock / Rate Adapter is the default (unknown clocks use ASRC).\nCheck Legacy Linear in the app menu to use the fallback on the next Start.\nNo automatic Direct selection without proven clock synchronization.";
+    if(!running && applicationTapFailure)diagnosticsText.string=[diagnosticsText.string stringByAppendingFormat:@"\n\n%@",applicationTapFailure];
     [diagnosticsPanel center];[diagnosticsPanel makeKeyAndOrderFront:nil];
 }
 - (BOOL)prepareRateAdapter {
@@ -287,9 +350,17 @@
     auto out=describeClock(activeDevice);outputClockDescription=out;
     clockSummary="OUTPUT: "+out.details+"\n";
     ClockEvidence evidence;
-    if(systemTapSelected){auto source=describeClock(processTap->sourceID());auto aggregate=describeClock(processTap->aggregateID());sourceClockDescription=source;aggregateClockDescription=aggregate;clockSummary+="SOURCE: "+source.details+"\nCAPTURE AGGREGATE: "+aggregate.details+"\nTap drift compensation requested: YES\n";
+    if([self usesProcessTap]){
+        sourceClockDescription=describeClock(processTap->sourceID());
+        clockSummary+="SOURCE: "+sourceClockDescription.details+"\nCapture mapping: native device stream 0, channels 1/2, no mixdown\n";
+        aggregateClockDescription=describeClock(processTap->aggregateID());
+        clockSummary+="CAPTURE AGGREGATE: "+aggregateClockDescription.details+"\nTap drift compensation requested: YES\n";
+        clockSummary+=selectedApplication?"Capture mode: Application Tap\n":"Capture mode: System Tap\n";
         evidence.reason="Aggregate/tap clock synchronization is not proven end-to-end (drift compensation requested); conservative ASRC";
-    }else evidence.reason="ScreenCaptureKit 48k clock relationship unknown; conservative ASRC";
+    }else{
+        clockSummary+="Capture mode: ScreenCaptureKit (original playback active)\n";
+        evidence.reason="ScreenCaptureKit 48k clock relationship unknown; conservative ASRC";
+    }
     try{bridge.rateAdapter.prepare(bridge.captureRate.load(),output->rate,evidence,legacyRateRequested);}
     catch(const std::exception& e){try{bridge.rateAdapter.prepare(bridge.captureRate.load(),output->rate,evidence,true);bridge.rateAdapter.reason=std::string("Prepare failed; explicit startup fallback: ")+e.what();}catch(...){return NO;}}
     clockSummary+="Mode reason: "+bridge.rateAdapter.reason+"\n";
@@ -299,18 +370,37 @@
 - (void)deviceChanged:(id)sender { if(running) [self stopWithMessage:@"出力先を変更しました。Startで再開してください（ミュート）。"]; }
 - (void)toggle:(id)sender {
     if(running) { [self stopWithMessage:@"停止中"]; return; }
-    if(busy || (!selectedFilter && !systemTapSelected) || !devices.selectedItem) return;
+    if(busy || (!selectedFilter && ![self usesProcessTap]) || !devices.selectedItem) return;
+    applicationTapFailure=nil;
+    auto targets=applicationAudioProcesses(selectedApplication);
+    if(selectedApplication && (!targets.resolved || targets.processes.empty())){
+        status.stringValue=selectedApplication.terminated?@"選択したアプリが終了しました。Application…から選び直してください。":@"選択したアプリの音声出力が見つかりません。再生を始めてからStartを押してください。";
+        applicationTapFailure=[NSString stringWithFormat:@"Application Tap: owner resolved=%d / %zu matched processes / %zu actively outputting at Start",targets.resolved,targets.matched,targets.active];
+        return;
+    }
     busy=YES; [recoveryHistory removeAllObjects];bridge.reset(); [inputView clearHold]; [outputView clearHold]; [self controls];
     activeDevice=[devices.selectedItem.representedObject unsignedIntValue];
     OSStatus result=output->start(activeDevice);
     if(result) { busy=NO; status.stringValue=[NSString stringWithFormat:@"出力開始失敗: %d",(int)result]; [self controls]; return; }
     auUI.processingRate=output->rate; geq.sampleRate=output->rate; geq.needsDisplay=YES;
-    if(systemTapSelected) {
-        result=processTap->start(false);
+    if([self usesProcessTap]) {
+        result=selectedApplication?processTap->startApplication(targets.processes,false):processTap->start(false);
+        applicationTapTargets=targets.processes;
         busy=NO;
-        if(result) { output->stop(); status.stringValue=[NSString stringWithFormat:@"System Tap開始失敗: %d（音声収録権限を確認）",(int)result]; }
-        else { if(![self prepareRateAdapter]){[self stopWithMessage:@"Invalid rate adapter configuration"];return;}result=processTap->resume();if(!result)result=output->resume();if(result){processTap->stop();output->stop();status.stringValue=@"出力再開失敗";}else running=YES;}
-        [self controls]; return;
+        if(result){
+            output->stop();
+            status.stringValue=[NSString stringWithFormat:@"Audio Tap開始失敗: %d（音声収録権限を確認）",(int)result];
+        }else{
+            if(![self prepareRateAdapter]){[self stopWithMessage:@"Invalid rate adapter configuration"];return;}
+            if(selectedApplication)clockSummary+="Application Tap targets: "+std::to_string(targets.matched)+
+                " matched / "+std::to_string(targets.active)+" actively outputting / "+
+                std::to_string(targets.processes.size())+" targeted at Start\nApplication aggregate start: immediate (tap auto-start disabled)\n";
+            result=processTap->resume();
+            if(!result)result=output->resume();
+            if(result){processTap->stop();output->stop();status.stringValue=@"出力再開失敗";}
+            else {applicationTapStartedAt=NSProcessInfo.processInfo.systemUptime;running=YES;}
+        }
+        [self controls];return;
     }
     bridge.captureRate=48000;
     SCStreamConfiguration* config=[SCStreamConfiguration new];
@@ -374,7 +464,23 @@
     if(!busy && now-lastPresetCheck>=0.2) { lastPresetCheck=now; [auUI refreshStatus]; }
     if(running&&!busy && now-lastDeviceCheck>=0.2) {
         lastDeviceCheck=now;
-        if(!clockConfigurationMatches(outputClockDescription)||(systemTapSelected&&(!clockConfigurationMatches(sourceClockDescription)||!clockConfigurationMatches(aggregateClockDescription)))){[self stopWithMessage:@"Clock/rate configuration changed; Start to re-prepare adapter."];return;}
+        if(selectedApplication.terminated){[self stopWithMessage:@"選択したアプリが終了したため停止しました。"];return;}
+        if(selectedApplication){
+            auto current=applicationAudioProcesses(selectedApplication);
+            if(!current.resolved){[self stopWithMessage:@"音声を出力するアプリを特定できなくなったため停止しました。"];return;}
+            if(current.processes!=applicationTapTargets){
+                OSStatus changed=processTap->updateApplication(current.processes);
+                if(changed){[self stopWithMessage:@"アプリの音声プロセス更新に失敗したため停止しました。"];return;}
+                applicationTapTargets=std::move(current.processes);
+            }
+        }
+        if(selectedApplication && !processTap->inputBlockCount() && now-applicationTapStartedAt>=3){
+            applicationTapFailure=[NSString stringWithFormat:@"Application Tap: no valid input within 3 s / callbacks=%llu / valid blocks=0",processTap->callbackCount()];
+            if(diagnosticsPanel.visible)diagnosticsText.string=[NSString stringWithFormat:@"%s\n%@",clockSummary.c_str(),applicationTapFailure];
+            [self stopWithMessage:@"Application Tapから入力が届かなかったため停止しました。"];return;
+        }
+        if(!clockConfigurationMatches(outputClockDescription)||([self usesProcessTap]&&!clockConfigurationMatches(sourceClockDescription))||
+           ([self usesProcessTap]&&!clockConfigurationMatches(aggregateClockDescription))){[self stopWithMessage:@"Clock/rate configuration changed; Start to re-prepare adapter."];return;}
         captureClockEstimate.update(bridge.captureTimestamp,clockSecondsPerTick);outputClockEstimate.update(bridge.outputTimestamp,clockSecondsPerTick);
         if(captureClockEstimate.estimatedRate && outputClockEstimate.estimatedRate){double ppm=(captureClockEstimate.estimatedRate/outputClockEstimate.estimatedRate/(bridge.captureRate.load()/output->rate)-1)*1e6;if(std::isfinite(ppm)&&std::abs(ppm)<1000)bridge.feedForwardPPM=ppm;}
         RecoveryEvent event;
@@ -388,13 +494,14 @@
             diagnosticsText.string=[NSString stringWithFormat:@"%s\nCapture nominal %.2f Hz / Output %.2f Hz\nTimestamp estimated %.5f / %.5f Hz (0 = unavailable or warming up)\nMode %s / ratio %.12f input frames per output frame / correction %+.4f ppm\nRing effective fill %.2f / target %zu (retained history included in raw queued: %llu)\nFill range %.2f .. %.2f\nSRC kernel latency %.4f ms / lookahead-priming %zu input frames / %zu taps\nUnderrun %llu / Overrun %llu / recoveries %llu\nCallback count %llu / mean %.3f us / max %.3f us\nHistogram upper-bound p95 %.3f / p99 %.3f / p99.9 %.3f us\n\nNo audio-thread file I/O. Legacy selection applies on next Start.\nReported device clocks above are startup snapshots.\n",clockSummary.c_str(),bridge.captureRate.load(),output->rate,captureClockEstimate.estimatedRate,outputClockEstimate.estimatedRate,rateModeName(bridge.rateAdapter.mode()),d.ratio.load(),d.ppm.load(),d.fill.load(),bridge.rateAdapter.targetFill(),bridge.queued(),d.minFill.load(),d.maxFill.load(),d.latencyMS.load(),bridge.rateAdapter.lookahead(),bridge.rateAdapter.taps(),bridge.underruns.load(),bridge.overruns.load(),d.recoveries.load(),count,count?t.totalNS.load()/double(count)/1000:0,t.maxNS.load()/1000.,t.percentileUS(.95),t.percentileUS(.99),t.percentileUS(.999)];
             NSString* observations=[NSString stringWithFormat:@"\nObservation only (SRC/controller decisions unchanged)\nActive minimum entry fill %.3f (original Fill range above includes startup)\nController ff %+.3f / P %+.3f / I %+.3f / desired %+.3f ppm / filtered fill %.3f\nCapture entry gap last/max %.3f / %.3fms; long-gap candidates %llu; sampleTime jumps %llu\nOutput entry gap last/max %.3f / %.3fms; long-gap candidates %llu; sampleTime jumps %llu\nSource zero-input frames before AU: startup %llu / after recovery %llu\nEvent records retained %lu / discarded by RT queue %llu\nEntry gaps include scheduling and planned pauses; not OS XRun counters.\nRecent events (oldest first; copy this text after a new event):\n%@",d.activeMinFill.load(),d.feedForwardPPM.load(),d.proportionalPPM.load(),d.integralPPM.load(),d.desiredPPM.load(),d.filteredFill.load(),bridge.captureActivity.lastGapTicks.load()*clockSecondsPerTick*1000,bridge.captureActivity.maxGapTicks.load()*clockSecondsPerTick*1000,bridge.captureActivity.longGaps.load(),bridge.captureActivity.sampleJumps.load(),bridge.outputActivity.lastGapTicks.load()*clockSecondsPerTick*1000,bridge.outputActivity.maxGapTicks.load()*clockSecondsPerTick*1000,bridge.outputActivity.longGaps.load(),bridge.outputActivity.sampleJumps.load(),bridge.initialZeroInputFrames.load(),bridge.recoveryZeroInputFrames.load(),(unsigned long)recoveryHistory.count,bridge.recoveryEvents.dropped.load(),[recoveryHistory componentsJoinedByString:@"\n\n"]];
             diagnosticsText.string=[diagnosticsText.string stringByAppendingString:observations];
+            if([self usesProcessTap])diagnosticsText.string=[diagnosticsText.string stringByAppendingFormat:@"\nTap IO callbacks %llu / valid input blocks %llu\n",processTap->callbackCount(),processTap->inputBlockCount()];
         }
 
         AudioObjectPropertyAddress a{kAudioDevicePropertyDeviceIsAlive,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain}; UInt32 alive=0,size=sizeof(alive);
         OSStatus err=AudioObjectGetPropertyData(activeDevice,&a,0,nullptr,&size,&alive);
         double rate=0; a.mSelector=kAudioDevicePropertyNominalSampleRate; size=sizeof(rate);
         OSStatus rateErr=AudioObjectGetPropertyData(activeDevice,&a,0,nullptr,&size,&rate);
-        if(systemTapSelected && !processTap->sourceIsCurrent()) { [self stopWithMessage:@"macOSの通常出力先が変わりました。Startで取り込み直してください。"]; return; }
+        if([self usesProcessTap] && !processTap->sourceIsCurrent()) { [self stopWithMessage:@"macOSの通常出力先が変わりました。Startで取り込み直してください。"]; return; }
         if(err||!alive||rateErr||rate!=output->rate) [self stopWithMessage:@"出力デバイス切断またはレート変更を検出して停止しました。"];
     }
 }

@@ -8,6 +8,11 @@ int main() { @autoreleasepool {
     CATapDescription* description=[[CATapDescription alloc] initExcludingProcesses:@[@123] andDeviceUID:@"test-device" withStream:0];
     description.mixdown=NO;
     assert(!description.isMixdown && description.isExclusive && description.stream.integerValue==0);
+    CATapDescription* application=[[CATapDescription alloc] initWithProcesses:@[@123,@124] andDeviceUID:@"test-device" withStream:0];
+    application.mixdown=NO;
+    assert(!application.isMixdown && !application.isExclusive && application.stream.integerValue==0);
+    assert([application.deviceUID isEqualToString:@"test-device"]);
+    assert(([application.processes isEqualToArray:@[@123,@124]]));
     for(unsigned channels:{2u,4u,8u,16u}) {
         AudioBridge bridge;bridge.muted=false;
         std::vector<float> data(4096*channels, .75f);
@@ -16,6 +21,8 @@ int main() { @autoreleasepool {
         assert(pushTapStereo(bridge,&list));
         float l[512]{},r[512]{};bridge.render(l,r,512,48000);
         assert(std::abs(l[511]-.125f)<1e-6 && std::abs(r[511]+.25f)<1e-6);
+        list.mBuffers[0].mDataByteSize=0;
+        assert(!pushTapStereo(bridge,&list));
         // No gain correction or averaging of the other live hardware channels.
     }
     struct Planar {UInt32 count;AudioBuffer buffers[8];} list{8,{}};
@@ -28,7 +35,10 @@ int main() { @autoreleasepool {
     assert(std::abs(l[511]-.125f)<1e-6 && std::abs(r[511]+.25f)<1e-6);
     assert(!pushTapStereo(bridge,nullptr));list.count=0;
     assert(!pushTapStereo(bridge,reinterpret_cast<AudioBufferList*>(&list)));
-    list.count=8;list.buffers[0].mData=nullptr;
+    list.count=8;
+    list.buffers[1].mDataByteSize=0;
     assert(!pushTapStereo(bridge,reinterpret_cast<AudioBufferList*>(&list)));
-    std::cout<<"PASS: non-mixdown exclusive device tap; original stereo level on 2/4/8/16-channel interleaved and 8-channel planar input; invalid buffers rejected\n";
+    list.buffers[0].mData=nullptr;
+    assert(!pushTapStereo(bridge,reinterpret_cast<AudioBufferList*>(&list)));
+    std::cout<<"PASS: native-stream System Tap and inclusive Application Tap without mixdown; original stereo level on 2/4/8/16-channel interleaved and 8-channel planar input; invalid buffers rejected\n";
 } }

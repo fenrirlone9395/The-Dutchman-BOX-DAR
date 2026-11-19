@@ -8,14 +8,17 @@ inline bool pushTapStereo(AudioBridge& bridge,const AudioBufferList* data) {
     const auto& first=data->mBuffers[0];
     if(first.mNumberChannels>=2 && first.mData) {
         auto* p=static_cast<const float*>(first.mData);
-        bridge.push(p,p+1,first.mDataByteSize/(sizeof(float)*first.mNumberChannels),first.mNumberChannels);
+        const auto frames=first.mDataByteSize/(sizeof(float)*first.mNumberChannels);
+        if(!frames)return false;
+        bridge.push(p,p+1,frames,first.mNumberChannels);
         return true;
     }
     if(first.mNumberChannels==1 && first.mData && data->mNumberBuffers>=2) {
         const auto& second=data->mBuffers[1];
         if(second.mNumberChannels!=1 || !second.mData) return false;
-        bridge.push(static_cast<const float*>(first.mData),static_cast<const float*>(second.mData),
-                    std::min(first.mDataByteSize,second.mDataByteSize)/sizeof(float),1);
+        const auto frames=std::min(first.mDataByteSize,second.mDataByteSize)/sizeof(float);
+        if(!frames)return false;
+        bridge.push(static_cast<const float*>(first.mData),static_cast<const float*>(second.mData),frames,1);
         return true;
     }
     return false;

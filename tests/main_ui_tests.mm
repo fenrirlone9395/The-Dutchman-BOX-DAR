@@ -4,6 +4,42 @@
 #include <cassert>
 int main(){@autoreleasepool{
     [NSApplication sharedApplication];RackApp* app=[RackApp new];[app applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+    assert(sameAudioBundle(@"com.example.Player",@"com.example.Player.helper"));
+    assert(!sameAudioBundle(@"com.example.Player",@"com.example.PlayerCopy"));
+    assert(!sameAudioBundle(nil,@"com.example.Player"));
+    assert([applicationAudioBundleFamily(@"com.google.Chrome.beta") isEqualToString:@"com.google.Chrome"]);
+    assert([applicationAudioBundleFamily(@"com.google.ChromeCopy") isEqualToString:@"com.google.ChromeCopy"]);
+    assert([chromiumPWAParent(@"com.google.Chrome.app.test") isEqualToString:@"com.google.Chrome"]);
+    assert([chromiumPWAParent(@"com.google.Chrome.beta.app.test") isEqualToString:@"com.google.Chrome.beta"]);
+    assert(!chromiumPWAParent(@"com.example.Reader.app.test"));
+    assert(!audioProcessDescendsFrom(getpid(),getpid()));
+    assert(!audioProcessDescendsFrom(-1,100));
+    for(NSMenuItem* item in [app webkitSourceMenu].itemArray){
+        if(!item.action)continue;
+        NSRunningApplication* helper=item.representedObject;
+        assert(sameAudioBundle(@"com.apple.WebKit",helper.bundleIdentifier));
+        [app selectApplication:item];
+        assert([app valueForKey:@"selectedApplication"]==helper && [app usesProcessTap]);
+        [app systemSource:nil];
+    }
+    for(NSMenuItem* item in [app applicationSourceMenu].itemArray){
+        if(!item.action)continue;
+        NSRunningApplication* application=item.representedObject;
+        assert(application.processIdentifier!=getpid());
+        auto audio=applicationAudioProcesses(application);
+        assert(audio.processes.size()==audio.active && audio.matched>=audio.active);
+        for(auto object:audio.processes){
+            UInt32 active=0,bytes=sizeof(active);
+            AudioObjectPropertyAddress address{kAudioProcessPropertyIsRunningOutput,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain};
+            assert(!AudioObjectGetPropertyData(object,&address,0,nullptr,&bytes,&active) && active);
+        }
+        [app selectApplication:item];
+        assert([app usesProcessTap] && [app valueForKey:@"selectedApplication"]==application);
+        if(@available(macOS 14.2,*)){
+            [app systemSource:nil];
+            assert([app usesProcessTap] && ![app valueForKey:@"selectedApplication"]);
+        }
+    }
     NSWindow* mainWindow=[app valueForKey:@"window"];AURackUI* ui=[app valueForKey:@"auUI"];
     NSView* rack=[ui embeddedView];
     [mainWindow.contentView layoutSubtreeIfNeeded];assert(rack.frame.size.width/mainWindow.contentView.bounds.size.width>.70);assert(rack.frame.size.height>500);
